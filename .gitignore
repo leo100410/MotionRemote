@@ -1,0 +1,12 @@
+build/
+DolphinBuild/dolphin-2609b/
+DolphinBuild/build/
+*.xcodeproj/
+Info.plist
+.DS_Store
+*.xcuserstate
+*.p12
+*.mobileprovision
+*.key
+*.pem
+downloads/

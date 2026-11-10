@@ -1,0 +1,1 @@
+iPhone motion controller for Dolphin on Mac, with Wii Remote controls, camera-assisted pointing, multiplayer and game rumble.

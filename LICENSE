@@ -1,0 +1,7 @@
+MotionRemote contains components under different licenses.
+
+The iPhone application and original MotionRemote additions are available under the MIT license in LICENSES/MIT.txt. Code derived from AimMac retains its original MIT notice in LICENSES/AimMac-MIT.txt.
+
+Dolphin and modifications distributed as part of Dolphin are licensed under GPL-2.0-or-later. See LICENSES/Dolphin-COPYING.txt and the SPDX notices in the corresponding source files. The MIT license does not replace Dolphin's license.
+
+Bundled dependencies retain their respective licenses; see docs/THIRD-PARTY.md.

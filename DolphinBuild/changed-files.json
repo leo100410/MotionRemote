@@ -1,0 +1,14 @@
+[
+  "Source/Core/Core/HW/WiimoteEmu/CameraPointer.h",
+  "Source/Core/Core/HW/WiimoteEmu/Dynamics.cpp",
+  "Source/Core/Core/HW/WiimoteEmu/Dynamics.h",
+  "Source/Core/Core/HW/WiimoteEmu/WiimoteEmu.cpp",
+  "Source/Core/DolphinQt/MenuBar.cpp",
+  "Source/Core/InputCommon/ControllerEmu/ControlGroup/IMUCursor.cpp",
+  "Source/Core/InputCommon/ControllerEmu/ControlGroup/IMUCursor.h",
+  "Source/Core/InputCommon/ControllerEmu/ControllerEmu.cpp",
+  "Source/Core/InputCommon/ControllerInterface/DualShockUDPClient/DualShockUDPClient.cpp",
+  "Source/Core/InputCommon/ControllerInterface/DualShockUDPClient/MotionRemoteState.h",
+  "Source/Core/VideoCommon/MotionRemoteOverlay.h",
+  "Source/Core/VideoCommon/OnScreenDisplay.cpp"
+]
