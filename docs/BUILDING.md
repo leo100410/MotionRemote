@@ -51,6 +51,13 @@ The app is produced under `DolphinBuild/build/Binaries/DolphinQt.app`. Packaging
 
 ## Checks
 
+Volume-button mapping can be checked without the Dolphin source:
+
+```sh
+xcrun swiftc Sources/VolumeButton.swift Tests/Volume/main.swift -o /tmp/motionremote-volume-tests
+/tmp/motionremote-volume-tests
+```
+
 With the patched Dolphin source at the path above:
 
 ```sh

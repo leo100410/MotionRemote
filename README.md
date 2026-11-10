@@ -8,12 +8,12 @@ Use an iPhone as a motion controller for Dolphin on Mac.
 
 MotionRemote sends buttons, acceleration and rotation over your local network. It includes a Wii Remote-style layout, a volume-button trigger, camera-assisted pointing and a custom Dolphin build with game rumble and a live motion overlay.
 
-[Download v1.8](https://github.com/leo100410/MotionRemote/releases/tag/v1.8) · [Installation](docs/INSTALLATION.md) · [Build from source](docs/BUILDING.md) · [How it works](docs/ARCHITECTURE.md)
+[Download v1.10](https://github.com/leo100410/MotionRemote/releases/tag/v1.10) · [Installation](docs/INSTALLATION.md) · [Build from source](docs/BUILDING.md) · [How it works](docs/ARCHITECTURE.md)
 
 ## What works
 
 - On-screen D-pad, A, B, Home, +, −, 1 and 2, with simultaneous button presses.
-- Volume Up as a hold-and-release trigger: A for Golf and Tennis, B for Bowling, or a manual override.
+- Volume Up as a hold-and-release trigger: A for Golf and Tennis, B for Bowling, or a manual override. Volume Down always holds B.
 - Four player slots, with a separate phone and Dolphin profile for each player.
 - Button haptics and game-triggered rumble through the custom Dolphin build.
 - Camera-assisted pointing, guided calibration and quick recentering.

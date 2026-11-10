@@ -3,6 +3,7 @@ import Network
 import CoreMotion
 import UIKit
 import Darwin
+import AVKit
 
 final class Controller: ObservableObject {
     @Published var status = "Stopped"
@@ -106,7 +107,25 @@ final class Controller: ObservableObject {
         UIApplication.shared.isIdleTimerDisabled = false
     }
     var trigger: String { triggerOverride == "Automatic" ? (profile == "Bowling" ? "B" : "A") : triggerOverride }
+    private var volumeTapTiming = VolumeTapTiming()
+    func volumeEvent(channel: String, phase: AVCaptureEventPhase) {
+        guard let mapping = VolumeButton.mapping(channel:channel,trigger:trigger) else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        if phase == .began {
+            volumeTapTiming.begin(source:mapping.source,now:now)
+            button(mapping.button,source:mapping.source,down:true)
+        } else if phase == .ended, let release = volumeTapTiming.release(source:mapping.source,now:now) {
+            if release.delay == 0 { button(mapping.button,source:mapping.source,down:false) }
+            else {
+                DispatchQueue.main.asyncAfter(deadline:.now()+release.delay) { [weak self] in
+                    guard let self, self.volumeTapTiming.matches(source:mapping.source,token:release.token) else { return }
+                    self.button(mapping.button,source:mapping.source,down:false)
+                }
+            }
+        } else { button(mapping.button,source:mapping.source,down:false) }
+    }
     func button(_ name: String, source: String, down: Bool) {
+        if !down { volumeTapTiming.cancel(source:source) }
         if down && sources[source] == nil && hapticsEnabled { feedback.impactOccurred(intensity:0.65); feedback.prepare() }
         if down { sources[source] = name } else { sources.removeValue(forKey:source) }
         held = Set(sources.values)
@@ -247,6 +266,7 @@ final class Controller: ObservableObject {
     func stop() {
         recordings.finish()
         gameHaptics.stop()
+        volumeTapTiming.reset()
         sources.removeAll(); held.removeAll()
         queue.sync {
             sessionGeneration &+= 1

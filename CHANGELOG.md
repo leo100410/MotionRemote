@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.10
+
+- Keep short volume-button taps visible for at least 50 ms across Dolphin input polls.
+- Keep release timing immediate for longer holds.
+- Cancel pending releases on stop, mapping/camera changes and capture cancellation.
+
+## 1.9
+
+- Map Volume Down to B in every sport.
+- Keep Volume Up, Volume Down and on-screen button holds independent.
+- Release both volume inputs when changing camera mode.
+- Compatible with the existing Dolphin MotionRemote 1.8 build.
+
 ## 1.8
 
 - Correct camera pointer axes to match the existing gyro input chain.

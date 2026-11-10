@@ -68,7 +68,7 @@ struct RemoteView: View {
                 HStack(spacing:4) {
                     ForEach(["Golf","Bowling","Tennis"],id:\.self) { sport in
                         Button {
-                            controller.button("",source:"volume",down:false); controller.profile = sport
+                            controller.button("",source:"volume-up",down:false); controller.profile = sport
                         } label: {
                             HStack(spacing:6) {
                                 Image(systemName:sport == "Golf" ? "flag.fill" : (sport == "Bowling" ? "figure.bowling" : "tennisball.fill"))
@@ -94,7 +94,7 @@ struct RemoteView: View {
                     key("B",size:54,dark:true)
                     VStack(alignment:.leading,spacing:3) {
                         Text("SIDE TRIGGER").font(.system(size:9,weight:.bold)).tracking(1.4).foregroundStyle(.secondary)
-                        Label("Volume up → \(controller.trigger)",systemImage:"speaker.plus.fill").font(.system(size:12,weight:.medium))
+                        Label("Vol + → \(controller.trigger) · Vol − → B",systemImage:"speaker.plus.fill").font(.system(size:12,weight:.medium))
                     }
                 }
                 Spacer(minLength:gap)
@@ -120,12 +120,13 @@ struct RemoteView: View {
         .onAppear {
             probe.spatial.onPose = { controller.updateSpatialPose($0) }
             probe.onEvent = { channel,phase in
-                guard channel == "Secondary", running else { return }
-                controller.button(controller.trigger,source:"volume",down:phase == .began)
+                guard running else { return }
+                controller.volumeEvent(channel:channel,phase:phase)
             }
         }
         .onChange(of:controller.spatialEnabled) { _,_ in
-            controller.button("",source:"volume",down:false)
+            controller.button("",source:"volume-up",down:false)
+            controller.button("",source:"volume-down",down:false)
             if running { probe.stop(); probe.start(spatial:controller.spatialEnabled) }
         }
         .onChange(of:scene) { _,phase in if phase != .active { stop() } }
@@ -215,10 +216,11 @@ struct RemoteView: View {
                         .disabled(!controller.gameHapticsEnabled || !controller.gameHaptics.supported)
                     Text(controller.gameHaptics.supported ? "Button taps work with any Dolphin version. Game rumble uses Dolphin MotionRemote and its Motor output." : "This device does not support game haptics.")
                 }
-                Section("Volume up button") {
+                Section("Volume buttons") {
+                    Text("Volume Down always holds B. Releasing either volume button releases only that button’s input.")
                     Picker("Maps to",selection:$controller.triggerOverride) {
                         Text("Sport default").tag("Automatic"); Text("A").tag("A"); Text("B").tag("B")
-                    }.onChange(of:controller.triggerOverride) { _,_ in controller.button("",source:"volume",down:false) }
+                    }.onChange(of:controller.triggerOverride) { _,_ in controller.button("",source:"volume-up",down:false) }
                     Text("Golf and Tennis use A. Bowling uses B. Hold the side button to hold the game button; release to let go.")
                 }
                 Section("Dolphin setup") {

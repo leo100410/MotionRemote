@@ -1,12 +1,12 @@
 # Installation
 
-Use the iPhone app and custom Dolphin build from the same release. The current pair is MotionRemote 1.8.
+Use the MotionRemote 1.10 iPhone app with Dolphin MotionRemote 1.8. This update changes only the phone app; the existing Mac build and controller profiles still work.
 
 ## 1. Install the iPhone app
 
 The distributed IPA is **unsigned**. It cannot be installed by opening it directly on an iPhone.
 
-Import `MotionRemote-1.8.ipa` into your existing signing tool, sign it with a valid certificate and provisioning profile for your device, then install it. If you use eSign, import the IPA, select your signing certificate, sign, then install. You supply the signing credentials; none are included here.
+Import `MotionRemote-1.10.ipa` into your existing signing tool, sign it with a valid certificate and provisioning profile for your device, then install it. If you use eSign, import the IPA, select your signing certificate, sign, then install. You supply the signing credentials; none are included here.
 
 Alternatively, [build the app in Xcode](BUILDING.md), choose your development team and run it on your paired iPhone. Wireless deployment works only after Xcode pairing is configured. Enable Developer Mode if Xcode asks for it.
 
@@ -71,6 +71,10 @@ Select the matching sport in the phone app. These presets select the Volume Up t
 | Golf | A |
 | Bowling | B |
 | Tennis | A |
+
+Short volume-button taps are transmitted for at least 50 ms so Dolphin can observe them. A hold longer than 50 ms releases immediately when you let go.
+
+Volume Down always maps to B in every preset, independently of the Volume Up override. You can hold both volume buttons together; releasing one does not release the other or an on-screen button.
 
 Hold and release Volume Up as you would the mapped Wii button. In Golf, follow the game's A-button prompts to enter the actual shot rather than a practice swing. All main Wii buttons are also available on screen. Settings allow A/B trigger overrides.
 
