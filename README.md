@@ -4,7 +4,7 @@
 
 # MotionRemote
 
-Use an iPhone as a motion controller for Dolphin on Mac.
+Use an iPhone as a motion controller for Dolphin on Mac or iPad.
 
 MotionRemote sends buttons, acceleration and rotation over your local network. It includes a Wii Remote-style layout, a volume-button trigger, camera-assisted pointing and a custom Dolphin build with game rumble and a live motion overlay.
 
@@ -22,7 +22,13 @@ MotionRemote sends buttons, acceleration and rotation over your local network. I
 
 Wii Sports Golf, Bowling and Tennis have been tried on the development setup. Other games may need different mappings; this is not a drop-in replacement for every Wii accessory.
 
-## Get started
+## Play on iPad
+
+[DolphiniOS MotionRemote 1.2](https://github.com/leo100410/MotionRemote/releases/tag/ipados-v1.2) runs the emulator on the iPad and uses the same iPhone controller app. It includes built-in JIT activation through LocalDevVPN, game rumble and the motion overlay. Keep its helper extension when signing.
+
+See the [iPad installation guide](docs/IPADOS.md) for pairing-file import, JIT setup and controller assignment, or [DolphiniOS build notes](DolphiniOS/README.md) for the matching source. Existing Mac downloads remain available.
+
+## Get started on Mac
 
 1. Install and sign the iPhone IPA using your own signing method.
 2. Open **Dolphin MotionRemote 1.8** on the Mac. Close other Dolphin copies first.

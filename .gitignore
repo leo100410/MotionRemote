@@ -10,3 +10,5 @@ Info.plist
 *.key
 *.pem
 downloads/
+
+!DolphiniOS/BuildSupport/JITHelper/Info.plist

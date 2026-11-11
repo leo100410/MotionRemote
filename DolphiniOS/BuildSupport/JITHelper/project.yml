@@ -1,0 +1,27 @@
+name: MotionRemoteJITHelper
+options:
+  deploymentTarget:
+    iOS: '17.4'
+settings:
+  base:
+    PRODUCT_BUNDLE_IDENTIFIER: com.leolange.motionremote.DolphiniOS-njb.JITHelper
+    MARKETING_VERSION: '5.0.0'
+    CURRENT_PROJECT_VERSION: '2'
+    SWIFT_VERSION: '5.0'
+    CODE_SIGNING_ALLOWED: NO
+    TARGETED_DEVICE_FAMILY: '1,2'
+    APPLICATION_EXTENSION_API_ONLY: YES
+    LD_RUNPATH_SEARCH_PATHS: '$(inherited) @executable_path/../../Frameworks'
+targets:
+  MotionRemoteJITHelper:
+    type: app-extension
+    platform: iOS
+    sources:
+      - JITHelper.swift
+      - JITProtocol.swift
+    settings:
+      INFOPLIST_FILE: Info.plist
+      SKIP_INSTALL: YES
+    dependencies:
+      - framework: Vendor/StikJIT.xcframework
+        embed: false

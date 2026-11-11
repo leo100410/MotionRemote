@@ -19,3 +19,11 @@ Qt 6.8.3 source modules are available from the [official Qt source archive](http
 `DolphinBuild/submodules.json` records the exact upstream submodule source archives used during development. The corresponding source trees are retained in the prepared Dolphin source archive. External package tooling and binary SDK downloads are not part of this repository.
 
 Apple frameworks are supplied by iOS/macOS and are not redistributed here. No Nintendo game content, system files or trademarks are licensed by this project.
+
+## DolphiniOS and built-in StikJIT
+
+The separate iPad release is based on [DolphiniOS v5.0.0b6](https://github.com/OatmealDome/dolphin-ios/tree/v5.0.0b6), under GPL-2.0-or-later. Its corresponding source archive includes the patched emulator, dependency source trees, project files and build instructions. `DolphiniOS/motionremote-ipados-1.2.patch` makes the changes reviewable in this repository. Original notices and dependency licenses remain in the source archive.
+
+[StikJIT 2.0.1](https://github.com/StikDebug/StikJIT/releases/tag/2.0.1) is MPL-2.0 licensed. The unmodified iOS framework is embedded for the helper process only. Its license is included in the IPA, under `DolphiniOS/BuildSupport/JITHelper/StikJIT-LICENSE`, and in the full source archive. The exact upstream StikJIT source release is retained as `BuildSupport/StikJIT-2.0.1-source.tar.gz` within the corresponding source archive.
+
+LocalDevVPN is a separate user-installed app, not bundled here. Apple platform SDKs are required to build but are not redistributed. No pairing files, private signing certificates, provisioning profiles, games or system firmware are included.

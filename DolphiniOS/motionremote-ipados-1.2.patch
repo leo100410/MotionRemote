@@ -1,0 +1,2064 @@
+--- a/Source/Core/Common/MemoryUtil_iOS_LuckTXM.cpp
++++ b/Source/Core/Common/MemoryUtil_iOS_LuckTXM.cpp
+@@ -34,7 +34,7 @@
+   const size_t size = EXECUTABLE_REGION_SIZE;
+   u8* rx_ptr = static_cast<u8*>(mmap(nullptr, size, PROT_READ | PROT_EXEC, MAP_ANON | MAP_PRIVATE, -1, 0));
+ 
+-  if (!rx_ptr)
++  if (rx_ptr == MAP_FAILED)
+   {
+     PanicAlertFmt("AllocateExecutableMemoryRegion failed! mmap returned {}", LastStrerrorString());
+     return;
+--- /dev/null
++++ b/Source/Core/Core/HW/WiimoteEmu/CameraPointer.h
+@@ -0,0 +1,33 @@
++#pragma once
++#include <array>
++#include <cmath>
++#include <algorithm>
++#include "Core/HW/WiimoteEmu/Dynamics.h"
++namespace WiimoteEmu {
++inline void ApplyCameraPointer(IMUCursorState* state, const std::array<float,4>& pose,
++ unsigned epoch, bool valid, bool recenter, float max_yaw, float dt) {
++ if (state->camera_epoch != epoch) {state->camera_centered=false;state->camera_epoch=epoch;}
++ state->camera_valid=valid && state->camera_centered;
++ if (!valid) return;
++ const Common::Quaternion camera(pose[3],pose[0],pose[1],pose[2]);
++ if (recenter) {state->camera_reference=camera;state->camera_centered=true;state->recentered_pitch=0;}
++ if (!state->camera_centered) return;
++ state->camera_valid=true;
++ const auto relative=state->camera_reference.Inverted()*camera;
++ // Match DSU -> IMUGyroscope -> negative gyro integration: (+X, +Y, -Z).
++ const auto& q=relative.data;
++ const Common::Quaternion target(q.w,q.x,q.y,-q.z);
++ auto current=state->tracked_rotation;
++ float dot=current.data.Dot(target.data);
++ auto end=target.data;
++ if(dot<0) {end=end*-1;dot=-dot;}
++ dot=std::clamp(dot,0.f,1.f);
++ const float weight=1-std::exp(-dt/0.1f);
++ float a=1-weight,b=weight;
++ if(dot<=0.9995f) {const float angle=std::acos(dot);a=std::sin((1-weight)*angle)/std::sin(angle);b=std::sin(weight*angle)/std::sin(angle);}
++ current=Common::Quaternion(current.data.w*a+end.w*b,current.data.x*a+end.x*b,current.data.y*a+end.y*b,current.data.z*a+end.z*b);
++ state->tracked_rotation=current.Normalized();state->rotation=state->tracked_rotation;
++ const float yaw=GetYaw(state->rotation);
++ state->rotation*=Common::Quaternion::RotateZ(std::clamp(yaw,-max_yaw,max_yaw)-yaw);
++}
++}
+--- a/Source/Core/Core/HW/WiimoteEmu/Dynamics.cpp
++++ b/Source/Core/Core/HW/WiimoteEmu/Dynamics.cpp
+@@ -317,34 +317,33 @@
+     return;
+   }
+ 
+-  // Apply rotation from gyro data.
++  const bool preserve_angle = imu_ir_group->GetPreserveAngle();
++  auto& rotation = preserve_angle ? state->tracked_rotation : state->rotation;
++
+   const auto gyro_rotation = GetRotationFromGyroscope(*ang_vel * -1 * time_elapsed);
+-  state->rotation = gyro_rotation * state->rotation;
+-
+-  // If we have some non-zero accel data use it to adjust gyro drift.
++  rotation = gyro_rotation * rotation;
++
+   const auto accel_weight = imu_ir_group->GetAccelWeight();
+-  auto const accel = imu_accelerometer_group->GetState().value_or(Common::Vec3{});
+-  if (accel.LengthSquared())
+-    state->rotation = ComplementaryFilter(state->rotation, accel, accel_weight);
+-
+-  // Clamp yaw within configured bounds.
++  const auto accel = imu_accelerometer_group->GetState().value_or(Common::Vec3{});
++  if (accel.LengthSquared() && !state->camera_valid)
++    rotation = ComplementaryFilter(rotation, accel, accel_weight);
++
++  if (imu_ir_group->controls[0]->GetState<bool>())
++  {
++    state->recentered_pitch = GetPitch(rotation);
++    rotation *= Common::Quaternion::RotateZ(-GetYaw(rotation));
++  }
++
++  // Only constrain the displayed pointer; preserve the overshoot in the physical state.
++  state->rotation = rotation;
+   const auto yaw = GetYaw(state->rotation);
+   const auto max_yaw = float(imu_ir_group->GetTotalYaw() / 2);
+-  auto target_yaw = std::clamp(yaw, -max_yaw, max_yaw);
+-
+-  // Handle the "Recenter" button being pressed.
+-  if (imu_ir_group->controls[0]->GetState<bool>())
+-  {
+-    state->recentered_pitch = GetPitch(state->rotation);
+-    target_yaw = 0;
+-  }
+-
+-  // Adjust yaw as needed.
++  const auto target_yaw = std::clamp(yaw, -max_yaw, max_yaw);
+   if (yaw != target_yaw)
+     state->rotation *= Common::Quaternion::RotateZ(target_yaw - yaw);
+-
+-  // Normalize for floating point inaccuracies.
+   state->rotation = state->rotation.Normalized();
++  state->tracked_rotation = preserve_angle ? rotation.Normalized() : state->rotation;
++
+ }
+ 
+ void ApproachPositionWithJerk(PositionalState* state, const Common::Vec3& position_target,
+--- a/Source/Core/Core/HW/WiimoteEmu/Dynamics.h
++++ b/Source/Core/Core/HW/WiimoteEmu/Dynamics.h
+@@ -43,7 +43,13 @@
+ {
+   // Rotation of world around device.
+   Common::Quaternion rotation = Common::Quaternion::Identity();
++  // Physical sensor orientation is separate from the clamped pointing output.
++  Common::Quaternion tracked_rotation = Common::Quaternion::Identity();
+ 
++  bool camera_centered = false;
++  bool camera_valid = false;
++  unsigned camera_epoch = 0;
++  Common::Quaternion camera_reference = Common::Quaternion::Identity();
+   float recentered_pitch = {};
+ };
+ 
+--- a/Source/Core/Core/HW/WiimoteEmu/WiimoteEmu.cpp
++++ b/Source/Core/Core/HW/WiimoteEmu/WiimoteEmu.cpp
+@@ -1,3 +1,5 @@
++#include "InputCommon/ControllerInterface/DualShockUDPClient/MotionRemoteState.h"
++#include "Core/HW/WiimoteEmu/CameraPointer.h"
+ // Copyright 2010 Dolphin Emulator Project
+ // SPDX-License-Identifier: GPL-2.0-or-later
+ 
+@@ -836,6 +838,27 @@
+   EmulateShake(&m_shake_state, m_shake, 1.f / ::Wiimote::UPDATE_FREQ);
+   EmulateIMUCursor(&m_imu_cursor_state, m_imu_ir, m_imu_accelerometer, m_imu_gyroscope,
+                    1.f / ::Wiimote::UPDATE_FREQ);
++  const auto& device = GetDefaultDevice();
++  if (device.source == "DSUClient" && (device.name == "MotionRemote" || device.name.starts_with("MotionRemote P")) && m_imu_ir->enabled.GetValue())
++  {
++    namespace MR = ciface::DualShockUDPClient::MotionRemote;
++    const auto poses = MR::Read();
++    int slot = device.name == "MotionRemote" ? 0 : (device.name.back() - '1');
++    if (slot >= 0 && slot < 4)
++    {
++      const auto& pose = poses[slot];
++      ApplyCameraPointer(&m_imu_cursor_state, pose.orientation, pose.epoch,
++          pose.tracking == 2 && MR::Now()-pose.pose_at < 0.3 && MR::Now()-pose.input_at < 1,
++          m_imu_ir->controls[0]->GetState<bool>(), float(m_imu_ir->GetTotalYaw()/2),
++          1.f / ::Wiimote::UPDATE_FREQ);
++    }
++  }
++  else
++  {
++    m_imu_cursor_state.camera_valid = false;
++    m_imu_cursor_state.camera_centered = false;
++  }
++
+ }
+ 
+ Common::Vec3 Wiimote::GetAcceleration(Common::Vec3 extra_acceleration) const
+--- a/Source/Core/InputCommon/ControllerEmu/ControlGroup/IMUCursor.cpp
++++ b/Source/Core/InputCommon/ControllerEmu/ControlGroup/IMUCursor.cpp
+@@ -27,6 +27,9 @@
+ #endif
+ {
+   AddInput(Translatability::Translate, _trans("Recenter"));
++  AddSetting(&m_preserve_angle_setting,
++             {_trans("Preserve Angle"), nullptr,
++              _trans("Keep the physical pointing angle beyond screen edges. Move back through the excess angle before the cursor returns.")},false);
+ 
+   // Default values chosen to reach screen edges in most games including the Wii Menu.
+ 
+@@ -60,4 +63,9 @@
+   return m_accel_weight_setting.GetValue() / 100;
+ }
+ 
++bool IMUCursor::GetPreserveAngle() const
++{
++  return m_preserve_angle_setting.GetValue();
++}
++
+ }  // namespace ControllerEmu
+--- a/Source/Core/InputCommon/ControllerEmu/ControlGroup/IMUCursor.h
++++ b/Source/Core/InputCommon/ControllerEmu/ControlGroup/IMUCursor.h
+@@ -20,8 +20,10 @@
+   ControlState GetTotalYaw() const;
+ 
+   ControlState GetAccelWeight() const;
++  bool GetPreserveAngle() const;
+ 
+ private:
++  SettingValue<bool> m_preserve_angle_setting;
+   SettingValue<double> m_yaw_setting;
+   SettingValue<double> m_accel_weight_setting;
+ };
+--- a/Source/Core/InputCommon/ControllerInterface/DualShockUDPClient/DualShockUDPClient.cpp
++++ b/Source/Core/InputCommon/ControllerInterface/DualShockUDPClient/DualShockUDPClient.cpp
+@@ -5,6 +5,9 @@
+ 
+ #include <algorithm>
+ #include <array>
++#include <atomic>
++#include <cmath>
++#include "InputCommon/ControllerInterface/DualShockUDPClient/MotionRemoteState.h"
+ #include <chrono>
+ #include <tuple>
+ 
+@@ -43,6 +46,39 @@
+ // Clock type used for querying timeframes
+ using SteadyClock = std::chrono::steady_clock;
+ 
++// MotionRemote extension: a bounded, sequenced rumble command on the subscribed UDP socket.
++struct MotionRemoteRumble
++{
++  static constexpr auto FROM = Proto::CLIENT;
++  static constexpr auto TYPE = 0x100003U;
++  Proto::MessageHeader header;
++  u32 message_type;
++  u8 pad_id;
++  u8 strength;
++  u16 padding{};
++  u32 sequence;
++};
++static_assert(sizeof(MotionRemoteRumble) == 28);
++
++#pragma pack(push, 1)
++struct MotionRemotePose
++{
++  static constexpr auto FROM = Proto::SERVER;
++  static constexpr auto TYPE = 0x100004U;
++  Proto::MessageHeader header;
++  u32 message_type;
++  u8 pad_id;
++  u8 tracking;
++  u16 reserved;
++  u32 epoch;
++  u32 sequence;
++  u64 timestamp_us;
++  std::array<float,3> position;
++  std::array<float,4> orientation;
++};
++#pragma pack(pop)
++static_assert(sizeof(MotionRemotePose) == 68);
++
+ class Device final : public Core::Device
+ {
+ private:
+@@ -97,6 +133,19 @@
+ 
+   using AccelerometerInput = MotionInput;
+   using GyroInput = MotionInput;
++
++  class RumbleOutput final : public Output
++  {
++  public:
++    explicit RumbleOutput(std::atomic<float>& strength) : m_strength(strength) {}
++    std::string GetName() const override { return "Motor"; }
++    void SetState(ControlState state) override
++    {
++      m_strength.store(std::isfinite(state) ? std::clamp(static_cast<float>(state), 0.0f, 1.0f) : 0.0f);
++    }
++  private:
++    std::atomic<float>& m_strength;
++  };
+ 
+   class BatteryInput final : public Input
+   {
+@@ -157,6 +206,10 @@
+   s16 m_touch_y_max = 0;
+ 
+   const u32 m_client_uid;
++  std::atomic<float> m_rumble{0.0f};
++  u32 m_rumble_sequence = 0;
++  SteadyClock::time_point m_next_rumble = SteadyClock::time_point::min();
++
+ };
+ 
+ using MathUtil::GRAVITY_ACCELERATION;
+@@ -521,6 +574,11 @@
+       m_server_port{server_port}, m_client_uid(client_uid)
+ {
+   m_socket.setBlocking(false);
++  if (m_name.starts_with("MotionRemote")) {
++    AddOutput(new RumbleOutput(m_rumble));
++    MotionRemote::Reset(m_index);
++  }
++
+ 
+   AddInput(new AnalogInput<u8>("Pad W", m_pad_data.button_dpad_left_analog, 255));
+   AddInput(new AnalogInput<u8>("Pad S", m_pad_data.button_dpad_down_analog, 255));
+@@ -617,6 +675,19 @@
+ {
+   // Regularly tell the UDP server to feed us controller data
+   const auto now = SteadyClock::now();
++  if (m_name.starts_with("MotionRemote") && now >= m_next_rumble)
++  {
++    m_next_rumble = now + std::chrono::milliseconds{100};
++    Proto::Message<MotionRemoteRumble> msg(m_client_uid);
++    msg.m_message.pad_id = static_cast<u8>(m_index);
++    msg.m_message.strength = static_cast<u8>(m_rumble.load() * 255.0f);
++    MotionRemote::Rumble(m_index,m_rumble.load());
++    msg.m_message.sequence = ++m_rumble_sequence;
++    msg.Finish();
++    if (const auto address = sf::IpAddress::resolve(m_server_address))
++      m_socket.send(&msg.m_message, sizeof(msg.m_message), *address, m_server_port);
++  }
++
+   if (now >= m_next_reregister)
+   {
+     m_next_reregister = now + SERVER_REREGISTER_INTERVAL;
+@@ -641,9 +712,17 @@
+   while (m_socket.receive(&msg, sizeof msg, received_bytes, sender, port) ==
+          sf::Socket::Status::Done)
+   {
++    if (m_name.starts_with("MotionRemote") && received_bytes==sizeof(MotionRemotePose) && msg.m_message.message_type==MotionRemotePose::TYPE)
++    {
++      if (auto pose=msg.CheckAndCastTo<MotionRemotePose>(); pose && pose->header.message_length==52 &&
++          pose->pad_id==m_index && pose->header.source_uid==m_pad_data.header.source_uid)
++        MotionRemote::Pose(m_index,pose->tracking,pose->epoch,pose->sequence,pose->timestamp_us,pose->position,pose->orientation);
++      continue;
++    }
+     if (auto pad_data = msg.CheckAndCastTo<Proto::MessageType::PadDataResponse>())
+     {
+       m_pad_data = *pad_data;
++      if (m_name.starts_with("MotionRemote")) MotionRemote::Input(m_index);
+ 
+       // Update touch pad relative coordinates
+       if (m_pad_data.touch1.id != m_prev_touch.id)
+--- /dev/null
++++ b/Source/Core/InputCommon/ControllerInterface/DualShockUDPClient/MotionRemoteState.h
+@@ -0,0 +1,70 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++#pragma once
++#include <array>
++#include <algorithm>
++#include <atomic>
++#include <chrono>
++#include <cmath>
++#include <cstdint>
++#include <deque>
++#include <mutex>
++
++namespace ciface::DualShockUDPClient::MotionRemote
++{
++inline constexpr double HistorySeconds=3.0;
++inline std::atomic_bool enabled{false};
++inline std::atomic_int selected{0};
++inline double Now() { return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
++struct Point { std::array<float,3> position; unsigned segment; double time; };
++struct RumblePoint { double time; float strength; };
++struct Snapshot
++{
++  double input_at=0, rumble_at=0, pose_at=0;
++  float rumble=0;
++  std::deque<RumblePoint> rumble_history;
++  std::uint32_t epoch=0, sequence=0;
++  std::uint64_t timestamp=0;
++  std::uint8_t tracking=0;
++  std::array<float,3> position{};
++  std::array<float,4> orientation{0,0,0,1};
++  std::deque<Point> trail;
++  unsigned segment=0;
++  bool break_trail=true;
++};
++inline std::mutex mutex;
++inline std::array<Snapshot,4> states;
++inline void Reset(int slot) { if(slot<0 || slot>=4)return; std::lock_guard lock(mutex); states[slot]=Snapshot{}; }
++inline void Input(int slot) { if(slot<0 || slot>=4)return; std::lock_guard lock(mutex); states[slot].input_at=Now(); }
++inline void Rumble(int slot,float value) {
++  if(slot<0 || slot>=4)return;
++  std::lock_guard lock(mutex);auto& s=states[slot];const auto now=Now();
++  s.rumble=std::isfinite(value)?std::clamp(value,0.0f,1.0f):0.0f;s.rumble_at=now;
++  s.rumble_history.push_back({now,s.rumble});
++  while(s.rumble_history.size()>256 || (!s.rumble_history.empty() && now-s.rumble_history.front().time>HistorySeconds))s.rumble_history.pop_front();
++}
++inline bool Pose(int slot,std::uint8_t tracking,std::uint32_t epoch,std::uint32_t sequence,std::uint64_t timestamp,
++                 std::array<float,3> position,std::array<float,4> orientation)
++{
++  if(slot<0 || slot>=4 || tracking>2)return false;
++  float norm=0;
++  for(float v:position)if(!std::isfinite(v)||std::abs(v)>1000)return false;
++  for(float v:orientation) {if(!std::isfinite(v))return false;norm+=v*v;}
++  if(!std::isfinite(norm)||norm<0.00001f)return false;
++  std::lock_guard lock(mutex);
++  auto& s=states[slot];
++  if(timestamp<=s.timestamp)return false;
++  if(epoch==s.epoch && s.timestamp!=0) { auto d=sequence-s.sequence; if(d==0 || d>=0x80000000)return false; }
++  if(epoch!=s.epoch) {s.trail.clear();s.break_trail=true;s.segment=0;}
++  const double now=Now();
++  if(now-s.pose_at>0.3)s.break_trail=true;
++  s.epoch=epoch;s.sequence=sequence;s.timestamp=timestamp;s.pose_at=now;s.tracking=tracking;
++  if(tracking!=2) {s.break_trail=true;return true;}
++  if(s.break_trail) {++s.segment;s.break_trail=false;}
++  for(float& v:orientation)v/=std::sqrt(norm);
++  s.position=position;s.orientation=orientation;
++  s.trail.push_back({position,s.segment,now});
++  while(s.trail.size()>512 || (!s.trail.empty() && now-s.trail.front().time>HistorySeconds))s.trail.pop_front();
++  return true;
++}
++inline std::array<Snapshot,4> Read() { std::lock_guard lock(mutex); return states; }
++}
+--- /dev/null
++++ b/Source/Core/VideoCommon/MotionRemoteOverlay.h
+@@ -0,0 +1,128 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++#pragma once
++#include <algorithm>
++#include <array>
++#include <cmath>
++#include <cstdio>
++#include <string>
++#include <imgui.h>
++#include "InputCommon/ControllerInterface/DualShockUDPClient/MotionRemoteState.h"
++
++namespace MotionRemoteOverlay
++{
++using V=std::array<float,3>;
++inline V Rotate(V p,const std::array<float,4>& q)
++{
++  V t{2*(q[1]*p[2]-q[2]*p[1]),2*(q[2]*p[0]-q[0]*p[2]),2*(q[0]*p[1]-q[1]*p[0])};
++  return {p[0]+q[3]*t[0]+q[1]*t[2]-q[2]*t[1],p[1]+q[3]*t[1]+q[2]*t[0]-q[0]*t[2],p[2]+q[3]*t[2]+q[0]*t[1]-q[1]*t[0]};
++}
++inline void Draw()
++{
++  namespace MR=ciface::DualShockUDPClient::MotionRemote;
++  if(!MR::enabled.load())return;
++  const auto states=MR::Read(); const double now=MR::Now();
++  const auto viewport=ImGui::GetMainViewport();
++  const float ui=ImGui::GetFontSize()/14.0f;
++  const float width=std::min(viewport->WorkSize.x-24,std::min(380.0f*ui,std::max(230.0f*ui,viewport->WorkSize.x*0.36f)));
++  ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x+viewport->WorkSize.x-12,viewport->WorkPos.y+12),ImGuiCond_Always,ImVec2(1,0));
++  ImGui::SetNextWindowSize(ImVec2(width,0));
++  ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding,16*ui);
++  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(16*ui,14*ui));
++  ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,ImVec2(8*ui,9*ui));
++  ImGui::PushStyleColor(ImGuiCol_WindowBg,ImVec4(0.035f,0.055f,0.085f,0.76f));
++  ImGui::PushStyleColor(ImGuiCol_Text,ImVec4(0.88f,0.94f,1,1));
++  ImGui::PushStyleColor(ImGuiCol_TextDisabled,ImVec4(0.42f,0.54f,0.65f,1));
++  if(ImGui::Begin("MotionRemote overlay",nullptr,ImGuiWindowFlags_NoDecoration|ImGuiWindowFlags_AlwaysAutoResize|ImGuiWindowFlags_NoInputs|ImGuiWindowFlags_NoSavedSettings))
++  {
++    ImGui::TextColored(ImVec4(0.30f,0.84f,1,1),"MOTION / REMOTE");
++    ImGui::SameLine();
++    ImGui::TextDisabled("   LIVE  /  03s");
++    auto* graphics=ImGui::GetWindowDrawList();
++    const float lane_w=ImGui::GetContentRegionAvail().x;
++    for(int i=0;i<4;++i) {
++      const auto& state=states[i];
++      const bool online=now-state.input_at<1;
++      const float strength=online && now-state.rumble_at<0.5?state.rumble:0;
++      const ImVec2 pos=ImGui::GetCursorScreenPos();
++      ImGui::InvisibleButton(("##rumble"+std::to_string(i)).c_str(),ImVec2(lane_w,35*ui));
++      graphics->AddRectFilled(pos,ImVec2(pos.x+lane_w,pos.y+35*ui),IM_COL32(20,32,47,180),7*ui);
++      graphics->AddCircleFilled(ImVec2(pos.x+12*ui,pos.y+17*ui),3*ui,online?IM_COL32(75,225,175,255):IM_COL32(70,85,100,255));
++      graphics->AddText(ImVec2(pos.x+22*ui,pos.y+9*ui),IM_COL32(210,228,245,255),("P"+std::to_string(i+1)).c_str());
++      char percent[12];std::snprintf(percent,sizeof(percent),"%3.0f%%",strength*100);
++      graphics->AddText(ImVec2(pos.x+lane_w-46*ui,pos.y+9*ui),online?IM_COL32(95,210,255,255):IM_COL32(95,110,130,255),percent);
++      const float left=pos.x+51*ui,right=pos.x+lane_w-57*ui,base=pos.y+28*ui;
++      graphics->AddLine(ImVec2(left,base),ImVec2(right,base),IM_COL32(45,65,85,255));
++      for(std::size_t j=1;j<state.rumble_history.size();++j) {
++        const auto a=state.rumble_history[j-1],b=state.rumble_history[j];
++        if(now-a.time>MR::HistorySeconds || b.time-a.time>0.35)continue;
++        const float x0=left+float(1-(now-a.time)/MR::HistorySeconds)*(right-left);
++        const float x1=left+float(1-(now-b.time)/MR::HistorySeconds)*(right-left);
++        const ImVec2 p0(x0,base-a.strength*22*ui),p1(x1,base-b.strength*22*ui);
++        graphics->AddQuadFilled(ImVec2(x0,base),p0,p1,ImVec2(x1,base),IM_COL32(40,170,235,35));
++        graphics->AddLine(p0,p1,IM_COL32(70,200,255,230),1.5f*ui);
++      }
++    }
++    const int player=std::clamp(MR::selected.load(),0,3); const auto& s=states[player];
++    ImGui::Spacing();
++    ImGui::Text("SPATIAL TRACE");ImGui::SameLine();ImGui::TextDisabled(" / PLAYER %d",player+1);
++    const bool live=s.tracking==2 && now-s.pose_at<0.3 && now-s.input_at<1;
++    if(live)ImGui::TextColored(ImVec4(0.35f,1,0.65f,1),"X %.2f  Y %.2f  Z %.2f m",s.position[0],s.position[1],s.position[2]);
++    else ImGui::TextWrapped(s.pose_at==0?"Enable Camera position tracking on this iPhone.":"Tracking unavailable / limited. Path paused.");
++    const float w=ImGui::GetContentRegionAvail().x;
++    const float h=std::clamp(viewport->WorkSize.y*0.30f,100.0f*ui,240.0f*ui);
++    const ImVec2 at=ImGui::GetCursorScreenPos();
++    ImGui::InvisibleButton("##spatial",ImVec2(w,h));
++    auto* draw=ImGui::GetWindowDrawList();
++    draw->AddRectFilled(at,ImVec2(at.x+w,at.y+h),IM_COL32(12,20,32,130),6);
++    V lo=live?s.position:V{0,0,0},hi=lo;bool have_bounds=live;
++    for(const auto& p:s.trail)if(now-p.time<=MR::HistorySeconds) {
++      if(!have_bounds){lo=p.position;hi=lo;have_bounds=true;}
++      for(int j=0;j<3;++j){lo[j]=std::min(lo[j],p.position[j]);hi[j]=std::max(hi[j],p.position[j]);}
++    }
++    const float extent=std::max({0.22f,hi[0]-lo[0],hi[1]-lo[1],hi[2]-lo[2]});
++    const V center{(lo[0]+hi[0])/2,(lo[1]+hi[1])/2,(lo[2]+hi[2])/2};
++    const V span{hi[0]-lo[0],hi[1]-lo[1],hi[2]-lo[2]};
++    const float projected_width=std::max(0.22f,0.814f*span[0]+0.581f*span[2]);
++    const float projected_height=std::max(0.22f,0.304f*span[0]+0.852f*span[1]+0.426f*span[2]);
++    const float scale=0.84f*std::min(w/projected_width,h/projected_height);
++    auto project=[&](V p) {
++      for(int j=0;j<3;++j)p[j]-=center[j];
++      return ImVec2(at.x+w/2+scale*(0.814f*p[0]-0.581f*p[2]),at.y+h/2-scale*(-0.304f*p[0]+0.852f*p[1]-0.426f*p[2]));
++    };
++    draw->PushClipRect(at,ImVec2(at.x+w,at.y+h),true);
++    const V origin=center;const float axis=extent*0.35f;
++    for(int i=-3;i<=3;++i) {
++      const float offset=float(i)*extent/6;
++      draw->AddLine(project({center[0]+offset,lo[1]-0.03f,center[2]-extent/2}),project({center[0]+offset,lo[1]-0.03f,center[2]+extent/2}),IM_COL32(55,85,110,65));
++      draw->AddLine(project({center[0]-extent/2,lo[1]-0.03f,center[2]+offset}),project({center[0]+extent/2,lo[1]-0.03f,center[2]+offset}),IM_COL32(55,85,110,65));
++    }
++    const std::array<ImU32,3> colors{IM_COL32(255,100,110,255),IM_COL32(100,230,155,255),IM_COL32(90,155,255,255)};
++    const char* labels[3]={"X","Y","Z"};
++    for(int j=0;j<3;++j){V end=origin;end[j]+=axis;draw->AddLine(project(origin),project(end),colors[j],1.5f);draw->AddText(project(end),colors[j],labels[j]);}
++    if(live) {
++      const float phone_scale=std::min(0.65f,32*ui/(scale*0.17f));
++      const std::array<V,8> box{{{-0.037f,-0.075f,-0.004f},{0.037f,-0.075f,-0.004f},{0.037f,0.075f,-0.004f},{-0.037f,0.075f,-0.004f},
++                               {-0.037f,-0.075f,0.004f},{0.037f,-0.075f,0.004f},{0.037f,0.075f,0.004f},{-0.037f,0.075f,0.004f}}};
++      std::array<ImVec2,8> corners;std::array<float,8> depth;
++      for(int i=0;i<8;++i){auto v=box[i];for(float& c:v)c*=phone_scale;v=Rotate(v,s.orientation);depth[i]=0.49f*v[0]+0.52f*v[1]+0.70f*v[2];for(int j=0;j<3;++j)v[j]+=s.position[j];corners[i]=project(v);}
++      const std::array<std::array<int,4>,6> faces{{{0,1,2,3},{4,5,6,7},{0,1,5,4},{1,2,6,5},{2,3,7,6},{3,0,4,7}}};
++      std::array<int,6> order{0,1,2,3,4,5};
++      auto face_depth=[&](int face){float value=0;for(int i:faces[face])value+=depth[i];return value;};
++      std::sort(order.begin(),order.end(),[&](int a,int b){return face_depth(a)<face_depth(b);});
++      for(int face:order){const auto f=faces[face];draw->AddQuadFilled(corners[f[0]],corners[f[1]],corners[f[2]],corners[f[3]],face==1?IM_COL32(35,120,190,75):IM_COL32(120,145,170,65));}
++      for(int i=0;i<4;++i){draw->AddLine(corners[i],corners[(i+1)%4],IM_COL32(245,250,255,255),1.5f);draw->AddLine(corners[i+4],corners[(i+1)%4+4],IM_COL32(80,165,255,255),2);draw->AddLine(corners[i],corners[i+4],IM_COL32(245,250,255,255),1);}
++      draw->AddCircleFilled(project(s.position),3,IM_COL32(255,220,80,255));
++    }
++    for(std::size_t i=1;i<s.trail.size();++i)if(s.trail[i].segment==s.trail[i-1].segment && now-s.trail[i-1].time<=MR::HistorySeconds) {
++      const int alpha=int(65+185*std::clamp(1-(now-s.trail[i].time)/MR::HistorySeconds,0.0,1.0));
++      draw->AddLine(project(s.trail[i-1].position),project(s.trail[i].position),IM_COL32(35,170,255,25),6*ui);
++      draw->AddLine(project(s.trail[i-1].position),project(s.trail[i].position),IM_COL32(75,210,255,alpha),2*ui);
++    }
++    draw->PopClipRect();
++    ImGui::TextDisabled("3 SECOND WINDOW  /  metres");
++    ImGui::TextDisabled("Game rumble + camera tracking. Options to change player.");
++  }
++  ImGui::End();
++  ImGui::PopStyleColor(3);ImGui::PopStyleVar(3);
++}
++}
+--- a/Source/Core/VideoCommon/OnScreenDisplay.cpp
++++ b/Source/Core/VideoCommon/OnScreenDisplay.cpp
+@@ -2,6 +2,7 @@
+ // SPDX-License-Identifier: GPL-2.0-or-later
+ 
+ #include "VideoCommon/OnScreenDisplay.h"
++#include "VideoCommon/MotionRemoteOverlay.h"
+ 
+ #include <algorithm>
+ #include <atomic>
+@@ -154,6 +155,7 @@
+ 
+ void DrawMessages()
+ {
++  MotionRemoteOverlay::Draw();
+   const bool draw_messages = Config::Get(Config::MAIN_OSD_MESSAGES);
+   const float current_x =
+       LEFT_MARGIN * ImGui::GetIO().DisplayFramebufferScale.x + s_obscured_pixels_left;
+--- /dev/null
++++ b/Source/iOS/App/Common/Jit/BuiltInJIT.swift
+@@ -0,0 +1,225 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++import Foundation
++import UIKit
++import UniformTypeIdentifiers
++
++@objc private protocol JITExtensionFactory {
++  @objc(extensionWithIdentifier:error:)
++  func find(withIdentifier identifier: String) throws -> AnyObject
++}
++@objc private protocol JITExtension {
++  @objc(beginExtensionRequestWithInputItems:completion:)
++  func begin(withInputItems items: [Any], completion: @escaping (NSUUID?) -> Void)
++  @objc(setRequestCompletionBlock:)
++  func onCompletion(_ block: @escaping (NSUUID?, [Any]?) -> Void)
++  @objc(setRequestCancellationBlock:)
++  func onCancellation(_ block: @escaping (NSUUID?, NSError?) -> Void)
++  @objc(setRequestInterruptionBlock:)
++  func onInterruption(_ block: @escaping (NSUUID?) -> Void)
++}
++
++final class BuiltInJIT {
++  static let shared = BuiltInJIT()
++  static let changed = Notification.Name("BuiltInJITChanged")
++  static var enabled: Bool { !UserDefaults.standard.bool(forKey: "MotionRemoteExternalJIT") }
++  var status = "Connect LocalDevVPN, import this device's pairing file, then enable JIT."
++  private(set) var busy = false
++  private var extensionObject: AnyObject?
++  private var requestID: UUID?
++  private var debuggerTimer: Timer?
++  private var memoryReady = false
++  private var helperReady = false
++  private var memoryStarted = false
++  var pairingURL: URL {
++    FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
++      .appendingPathComponent("StikJIT/pairingFile.plist")
++  }
++  var hasPairing: Bool { FileManager.default.fileExists(atPath: pairingURL.path) }
++
++  func update(_ text: String) {
++    status = text
++    NotificationCenter.default.post(name: Self.changed, object: self)
++  }
++
++  func importPairing(from url: URL) throws {
++    let scoped = url.startAccessingSecurityScopedResource()
++    defer { if scoped { url.stopAccessingSecurityScopedResource() } }
++    let data = try Data(contentsOf: url, options: .mappedIfSafe)
++    try storeJITPairing(data, at: pairingURL)
++    var file = pairingURL
++    var values = URLResourceValues(); values.isExcludedFromBackup = true
++    try file.setResourceValues(values)
++    UserDefaults.standard.set(false, forKey: "MotionRemoteExternalJIT")
++    update("Pairing file imported. Connect LocalDevVPN, then tap Enable JIT.")
++  }
++
++  func run(reset: Bool = false) {
++    guard !busy else { return }
++    guard #available(iOS 17.4, *), getenv("LC_HOME_PATH") == nil else {
++      update("Built-in JIT requires iOS 17.4 or later and does not support LiveContainer."); return
++    }
++    guard reset || hasPairing else { update("Import this device's pairing file before enabling JIT."); return }
++    let manager = JitManager.shared()
++    if !reset && manager.builtInJitReady { update("JIT is already enabled for this session."); return }
++    guard reset || manager.hasDebugEntitlement() else {
++      update("This installation is missing get-task-allow. Re-sign with development signing and keep the JIT helper extension."); return
++    }
++    let request: BuiltInJITRequest
++    do {
++      let data = reset ? nil : try Data(contentsOf: pairingURL)
++      if let data { try validateJITPairing(data) }
++      request = .init(id: UUID(), operation: reset ? "reset" : "enable", pid: getpid(), pairing: data,
++                      needsScript: manager.deviceHasTxm)
++      guard let url = Bundle.main.builtInPlugInsURL?.appendingPathComponent("MotionRemoteJITHelper.appex"),
++            let identifier = Bundle(url: url)?.bundleIdentifier else {
++        throw failure("JIT helper missing. Reinstall this IPA and keep its app extension when signing.")
++      }
++      if NSClassFromString("NSExtension") == nil {
++        dlopen("/System/Library/Frameworks/ExtensionFoundation.framework/ExtensionFoundation", RTLD_NOW)
++      }
++      guard let type = NSClassFromString("NSExtension") else { throw failure("iOS could not load the extension API.") }
++      let factory = unsafeBitCast(type as AnyObject, to: JITExtensionFactory.self)
++      let object = try factory.find(withIdentifier: identifier)
++      let shim = unsafeBitCast(object, to: JITExtension.self)
++      let item = NSExtensionItem()
++      item.userInfo = [BuiltInJITRequest.key: try JSONEncoder().encode(request)]
++      busy = true; extensionObject = object; requestID = request.id
++      memoryReady = reset; helperReady = false; memoryStarted = false
++      if !reset {
++        manager.usingBuiltInJit = true; manager.builtInJitReady = false; manager.acquisitionError = nil
++        UserDefaults.standard.set(false, forKey: "MotionRemoteExternalJIT")
++      }
++      update(reset ? "Resetting Developer Disk Image cache…" : "Preparing device and enabling JIT… The first DDI download can take several minutes. Keep DolphiniOS open.")
++      shim.onCompletion { [weak self] _, items in
++        let data = (items?.first as? NSExtensionItem)?.userInfo?[BuiltInJITResponse.key] as? Data
++        DispatchQueue.main.async {
++          guard let self, self.requestID == request.id else { return }
++          guard let data, let response = try? JSONDecoder().decode(BuiltInJITResponse.self, from: data),
++                response.id == request.id else { self.finish("The JIT helper returned an invalid response."); return }
++          guard response.success else { self.finish(response.message); return }
++          if reset { self.finish(response.message); return }
++          self.helperReady = true
++          self.checkDebugger()
++          self.completeIfReady()
++        }
++      }
++      shim.onCancellation { [weak self] _, error in
++        DispatchQueue.main.async {
++          guard self?.requestID == request.id else { return }
++          self?.finish(error?.localizedDescription ?? "The JIT helper was cancelled.")
++        }
++      }
++      shim.onInterruption { [weak self] _ in
++        DispatchQueue.main.async {
++          guard self?.requestID == request.id else { return }
++          self?.finish("The JIT helper stopped unexpectedly. Keep LocalDevVPN connected and try again.")
++        }
++      }
++      shim.begin(withInputItems: [item]) { [weak self] uuid in
++        DispatchQueue.main.async {
++          guard let self, self.requestID == request.id else { return }
++          guard uuid != nil else { self.finish("iOS could not start the JIT helper. Check that your signer kept the app extension."); return }
++          if !reset {
++            self.debuggerTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in self?.checkDebugger() }
++          }
++        }
++      }
++    } catch { finish(error.localizedDescription) }
++  }
++
++  private func checkDebugger() {
++    guard busy, !memoryStarted, JitManager.shared().isBuiltInDebuggerAttached() else { return }
++    memoryStarted = true
++    debuggerTimer?.invalidate(); debuggerTimer = nil
++    let id = requestID
++    update("Debugger connected. Preparing Dolphin's executable memory…")
++    DispatchQueue.global(qos: .userInitiated).async {
++      let success = JitManager.shared().prepareBuiltInJitMemory()
++      DispatchQueue.main.async {
++        guard self.requestID == id else { return }
++        guard success else { self.finish("Dolphin could not prepare executable memory. Restart DolphiniOS before retrying."); return }
++        self.memoryReady = true
++        self.completeIfReady()
++      }
++    }
++  }
++  private func completeIfReady() {
++    guard memoryReady, helperReady else { return }
++    let manager = JitManager.shared()
++    manager.builtInJitReady = true
++    manager.recheckIfJitIsAcquired()
++    finish(manager.acquiredJit ? "JIT enabled. You can start a game." : "The debugger did not enable JIT. Check your signing entitlements.")
++  }
++  private func finish(_ message: String) {
++    debuggerTimer?.invalidate(); debuggerTimer = nil
++    busy = false; requestID = nil; extensionObject = nil
++    update(message)
++  }
++  private func failure(_ message: String) -> NSError {
++    NSError(domain: "BuiltInJIT", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
++  }
++}
++
++final class BuiltInJITViewController: UITableViewController, UIDocumentPickerDelegate {
++  private let jit = BuiltInJIT.shared
++  private var observer: NSObjectProtocol?
++  init() { super.init(style: .insetGrouped) }
++  required init?(coder: NSCoder) { fatalError("Use init()") }
++  override func viewDidLoad() {
++    super.viewDidLoad()
++    title = "JIT Setup"
++    navigationItem.rightBarButtonItem = UIBarButtonItem(barButtonSystemItem: .done, target: self, action: #selector(close))
++    observer = NotificationCenter.default.addObserver(forName: BuiltInJIT.changed, object: nil, queue: .main) { [weak self] _ in self?.tableView.reloadData() }
++  }
++  deinit { if let observer { NotificationCenter.default.removeObserver(observer) } }
++  @objc private func close() { dismiss(animated: true) }
++  override func numberOfSections(in tableView: UITableView) -> Int { 2 }
++  override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { section == 0 ? 1 : 4 }
++  override func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
++    section == 0 ? "Built-in StikJIT" : "Setup"
++  }
++  override func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? {
++    section == 1 ? "Keep LocalDevVPN connected and allow Local Network access. Import a pairing file for this iPad. The first activation downloads a Developer Disk Image. JIT lasts until DolphiniOS closes.\n\nThe bundled helper shares this app installation; no separate StikDebug app is needed.\n\nStikJIT 2.0.1 · MPL-2.0 · github.com/StikDebug/StikJIT" : nil
++  }
++  override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
++    let cell = UITableViewCell(style: .subtitle, reuseIdentifier: nil)
++    cell.textLabel?.numberOfLines = 0
++    cell.detailTextLabel?.numberOfLines = 0
++    if indexPath.section == 0 {
++      cell.textLabel?.text = jit.status
++      cell.selectionStyle = .none
++    } else {
++      cell.textLabel?.text = ["Import Pairing File", "Enable JIT", "Reset Developer Disk Image", "Use External Debugger"][indexPath.row]
++      cell.textLabel?.textColor = jit.busy ? .secondaryLabel : view.tintColor
++      cell.isUserInteractionEnabled = !jit.busy
++      if indexPath.row == 0 { cell.detailTextLabel?.text = jit.hasPairing ? "Pairing file saved on this device" : "No pairing file imported" }
++      if indexPath.row == 3 { cell.detailTextLabel?.text = "Use existing StikDebug / AltServer / JitStreamer setup" }
++    }
++    return cell
++  }
++  override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
++    tableView.deselectRow(at: indexPath, animated: true)
++    guard indexPath.section == 1, !jit.busy else { return }
++    switch indexPath.row {
++    case 0:
++      let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.data], asCopy: false)
++      picker.delegate = self; present(picker, animated: true)
++    case 1: jit.run()
++    case 2:
++      let alert = UIAlertController(title: "Reset Developer Disk Image?", message: "The next activation may download the DDI again. Your games, saves and pairing file are kept.", preferredStyle: .alert)
++      alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
++      alert.addAction(UIAlertAction(title: "Reset", style: .destructive) { _ in self.jit.run(reset: true) })
++      present(alert, animated: true)
++    default:
++      guard !JitManager.shared().usingBuiltInJit else {
++        jit.update("Restart DolphiniOS before switching from a built-in JIT session to an external debugger."); return
++      }
++      UserDefaults.standard.set(true, forKey: "MotionRemoteExternalJIT")
++      jit.update("External debugger selected. Enable JIT with StikDebug, or start a game to try AltServer / JitStreamer.")
++    }
++  }
++  func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
++    guard let url = urls.first else { return }
++    do { try jit.importPairing(from: url) } catch { jit.update(error.localizedDescription) }
++  }
++}
+--- /dev/null
++++ b/Source/iOS/App/Common/Jit/JitManager+BuiltIn.mm
+@@ -0,0 +1,28 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++#import "JitManager.h"
++#import "JitManager+Debugger.h"
++#import <Security/Security.h>
++#include "Common/MemoryUtil.h"
++
++extern "C" CFTypeRef SecTaskCreateFromSelf(CFAllocatorRef allocator);
++extern "C" CFTypeRef SecTaskCopyValueForEntitlement(CFTypeRef task, CFStringRef entitlement, CFErrorRef* error);
++
++@implementation JitManager (BuiltIn)
++- (bool)hasDebugEntitlement {
++  CFTypeRef task = SecTaskCreateFromSelf(kCFAllocatorDefault);
++  if (!task) return false;
++  CFTypeRef value = SecTaskCopyValueForEntitlement(task, CFSTR("get-task-allow"), nullptr);
++  bool allowed = value && CFGetTypeID(value) == CFBooleanGetTypeID() && CFBooleanGetValue((CFBooleanRef)value);
++  if (value) CFRelease(value);
++  CFRelease(task);
++  return allowed;
++}
++- (bool)isBuiltInDebuggerAttached {
++  return [self checkIfProcessIsDebugged];
++}
++- (bool)prepareBuiltInJitMemory {
++  if (!self.deviceHasTxm) return true;
++  Common::AllocateExecutableMemoryRegion_LuckTXM();
++  return Common::AllocateWritableRegionAndGetDiff_LuckTXM() != 0;
++}
++@end
+--- a/Source/iOS/App/Common/Jit/JitManager+Debugger.m
++++ b/Source/iOS/App/Common/Jit/JitManager+Debugger.m
+@@ -15,8 +15,8 @@
+ @implementation JitManager (Debugger)
+ 
+ - (bool)checkIfProcessIsDebugged {
+-  int flags;
+-  if (csops(getpid(), CS_OPS_STATUS, &flags, sizeof(flags) != 0)) {
++  int flags = 0;
++  if (csops(getpid(), CS_OPS_STATUS, &flags, sizeof(flags)) != 0) {
+     return false;
+   }
+ 
+--- a/Source/iOS/App/Common/Jit/JitManager.h
++++ b/Source/iOS/App/Common/Jit/JitManager.h
+@@ -8,6 +8,8 @@
+ @interface JitManager : NSObject
+ 
+ @property (readonly, assign) bool acquiredJit;
++@property (nonatomic) bool usingBuiltInJit;
++@property (nonatomic) bool builtInJitReady;
+ @property (nonatomic, nullable) NSString* acquisitionError;
+ 
+ @property (readonly, assign) bool deviceHasTxm;
+@@ -18,4 +20,10 @@
+ 
+ @end
+ 
++@interface JitManager (BuiltIn)
++- (bool)hasDebugEntitlement;
++- (bool)isBuiltInDebuggerAttached;
++- (bool)prepareBuiltInJitMemory;
++@end
++
+ NS_ASSUME_NONNULL_END
+--- a/Source/iOS/App/Common/Jit/JitManager.m
++++ b/Source/iOS/App/Common/Jit/JitManager.m
+@@ -69,9 +69,9 @@
+       }
+     }
+     
+-    self.acquiredJit = [self checkIfProcessIsDebugged];
++    self.acquiredJit = [self checkIfProcessIsDebugged] && (!self.usingBuiltInJit || self.builtInJitReady);
+     
+-    if (self.deviceHasTxm && self.acquiredJit) {
++    if (self.deviceHasTxm && self.acquiredJit && !self.usingBuiltInJit) {
+       self.acquisitionError = @"A debugger is attached. However, if the debugger is not StikDebug, DolphiniOS will crash when emulation starts.";
+     }
+   } else if (_jitType == DOLJitTypeUnrestricted) {
+--- a/Source/iOS/App/Common/Services/FirebaseService.mm
++++ b/Source/iOS/App/Common/Services/FirebaseService.mm
+@@ -1,86 +1,5 @@
+ // Copyright 2023 DolphiniOS Project
+ // SPDX-License-Identifier: GPL-2.0-or-later
+-
+ #import "FirebaseService.h"
+-
+-#import <FirebaseAnalytics/FirebaseAnalytics.h>
+-#import <FirebaseCore/FirebaseCore.h>
+-#import <FirebaseCrashlytics/FirebaseCrashlytics.h>
+-
+-#import "Core/Config/MainSettings.h"
+-
+-#import "AnalyticsNoticeViewController.h"
+-#import "BootNoticeManager.h"
+-#import "Swift.h"
+-
+-@interface FirebaseService () <AnalyticsNoticeViewControllerDelegate>
+-
++@implementation FirebaseService
+ @end
+-
+-@implementation FirebaseService {
+-  BOOL _shouldSendInitialEvent;
+-}
+-
+-- (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary<UIApplicationLaunchOptionsKey,id>*)launchOptions {
+-  if ([VersionManager shared].appVersion.source != DOLBuildSourceOfficial) {
+-    return true;
+-  }
+-  
+-  [FIRApp configure];
+-  
+-  bool analyticsEnabled;
+-  
+-  if (!Config::GetBase(Config::MAIN_ANALYTICS_PERMISSION_ASKED)) {
+-    // Default to no analytics temporarily
+-    analyticsEnabled = false;
+-    
+-    AnalyticsNoticeViewController* controller = [[AnalyticsNoticeViewController alloc] initWithNibName:@"AnalyticsNotice" bundle:nil];
+-    controller.delegate = self;
+-    
+-    [[BootNoticeManager shared] enqueueViewController:controller];
+-  } else {
+-    analyticsEnabled = Config::GetBase(Config::MAIN_ANALYTICS_ENABLED);
+-  }
+-  
+-  [FIRAnalytics setAnalyticsCollectionEnabled:analyticsEnabled];
+-  [[FIRCrashlytics crashlytics] setCrashlyticsCollectionEnabled:analyticsEnabled];
+-  
+-  if (analyticsEnabled) {
+-    NSUserDefaults* defaults = [NSUserDefaults standardUserDefaults];
+-    
+-    NSString* lastVersion = [defaults stringForKey:@"last_version"];
+-    NSString* currentVersion = [VersionManager shared].appVersion.userFacing;
+-    
+-    _shouldSendInitialEvent = ![lastVersion isEqualToString:currentVersion];
+-  } else {
+-    _shouldSendInitialEvent = false;
+-  }
+-  
+-  return true;
+-}
+-
+-- (void)didFinishAnalyticsNoticeWithResult:(BOOL)result sender:(id)sender {
+-  if (result) {
+-    [self sendInitialAnalyticsEvents];
+-  }
+-}
+-
+-- (void)sendInitialAnalyticsEvents {
+-  if (_shouldSendInitialEvent) {
+-    NSString* appType;
+-#ifdef NONJAILBROKEN
+-    appType = @"non-jailbroken";
+-#elif defined(TROLLSTORE)
+-    appType = @"trollstore";
+-#else
+-    appType = @"jailbroken";
+-#endif
+-    
+-    [FIRAnalytics logEventWithName:@"version_start" parameters:@{
+-      @"type" : appType,
+-      @"version" : [VersionManager shared].appVersion.userFacing
+-    }];
+-  }
+-}
+-
+-@end
+--- a/Source/iOS/App/Common/Services/JitAcquisitionService.swift
++++ b/Source/iOS/App/Common/Services/JitAcquisitionService.swift
+@@ -13,7 +13,7 @@
+       manager.acquireJitByPTrace()
+       
+ #if NONJAILBROKEN
+-      manager.acquireJitByAltServer()
++      if !BuiltInJIT.enabled { manager.acquireJitByAltServer() }
+ #endif
+     }
+     
+--- a/Source/iOS/App/Common/UI/BootNotice/Analytics/AnalyticsNoticeViewController.mm
++++ b/Source/iOS/App/Common/UI/BootNotice/Analytics/AnalyticsNoticeViewController.mm
+@@ -3,8 +3,6 @@
+ 
+ #import "AnalyticsNoticeViewController.h"
+ 
+-#import <FirebaseAnalytics/FirebaseAnalytics.h>
+-#import <FirebaseCrashlytics/FirebaseCrashlytics.h>
+ 
+ #import "Core/Config/MainSettings.h"
+ 
+@@ -22,9 +20,6 @@
+   Config::SetBaseOrCurrent(Config::MAIN_ANALYTICS_PERMISSION_ASKED, true);
+   Config::SetBaseOrCurrent(Config::MAIN_ANALYTICS_ENABLED, response);
+   
+-  [FIRAnalytics setAnalyticsCollectionEnabled:response];
+-  [[FIRCrashlytics crashlytics] setCrashlyticsCollectionEnabled:response];
+-  
+   [self.navigationController popViewControllerAnimated:true];
+   
+   [self.delegate didFinishAnalyticsNoticeWithResult:response sender:self];
+--- a/Source/iOS/App/Common/UI/Emulation/EmulationViewController.mm
++++ b/Source/iOS/App/Common/UI/Emulation/EmulationViewController.mm
+@@ -3,7 +3,6 @@
+ 
+ #import "EmulationViewController.h"
+ 
+-#import <FirebaseAnalytics/FirebaseAnalytics.h>
+ 
+ #import <GameController/GameController.h>
+ 
+@@ -252,12 +251,6 @@
+     if ([title isEqualToString:@""]) {
+       title = @"Unknown";
+     }
+-    
+-    [FIRAnalytics logEventWithName:@"game_start" parameters:@{
+-      @"game_uid" : title,
+-      @"is_returning" : @"false", // TODO
+-      @"connected_controllers" : [controllerList count] != 0 ? [controllerList componentsJoinedByString:@", "] : @"none"
+-    }];
+   }
+ }
+ 
+--- a/Source/iOS/App/Common/UI/Emulation/JitWait/JitWaitViewController.swift
++++ b/Source/iOS/App/Common/UI/Emulation/JitWait/JitWaitViewController.swift
+@@ -8,22 +8,34 @@
+   
+   var timer: Timer?
+   var isShowingError: Bool = false
++  private var attemptedBuiltInJIT = false
+   
+   override func viewDidLoad() {
+     super.viewDidLoad()
+     
+     self.timer = Timer.scheduledTimer(timeInterval: 1, target: self, selector: #selector(checkJit), userInfo: nil, repeats: true)
+     
+-    JitManager.shared().acquireJitByAltServer()
+-    JitManager.shared().acquireJitByJitStreamer()
++    if !BuiltInJIT.enabled {
++      JitManager.shared().acquireJitByAltServer()
++      JitManager.shared().acquireJitByJitStreamer()
++    }
+   }
+   
++  override func viewDidAppear(_ animated: Bool) {
++    super.viewDidAppear(animated)
++    if !attemptedBuiltInJIT && BuiltInJIT.enabled && BuiltInJIT.shared.hasPairing && !BuiltInJIT.shared.busy {
++      attemptedBuiltInJIT = true
++      BuiltInJIT.shared.run()
++    }
++  }
++
+   override func viewWillAppear(_ animated: Bool) {
++    super.viewWillAppear(animated)
+     self.showAcquisitionErrorIfNecessary()
+   }
+   
+   @objc func checkJit() {
+-    if (self.isShowingError) {
++    if (self.isShowingError || self.presentedViewController != nil) {
+       return
+     }
+     
+@@ -58,8 +70,7 @@
+   }
+   
+   @IBAction func helpPressed(_ sender: Any) {
+-    let url = URL.init(string: "https://dolphinios.oatmealdome.me/jit-help")
+-    UIApplication.shared.open(url!, options: [:], completionHandler: nil)
++    present(UINavigationController(rootViewController: BuiltInJITViewController()), animated: true)
+   }
+   
+   @IBAction func noJitPressed(_ sender: Any) {
+--- a/Source/iOS/App/Common/UI/Settings/Controllers/ControllersRootViewController.mm
++++ b/Source/iOS/App/Common/UI/Settings/Controllers/ControllersRootViewController.mm
+@@ -2,6 +2,16 @@
+ // SPDX-License-Identifier: GPL-2.0-or-later
+ 
+ #import "ControllersRootViewController.h"
++#include <arpa/inet.h>
++#include <sstream>
++#include "Common/FileUtil.h"
++#include "Common/IniFile.h"
++#include "Common/Config/Config.h"
++#include "InputCommon/InputConfig.h"
++#include "InputCommon/ControllerEmu/ControllerEmu.h"
++#include "InputCommon/ControllerInterface/ControllerInterface.h"
++#include "InputCommon/ControllerInterface/DualShockUDPClient/DualShockUDPClient.h"
++#include "InputCommon/ControllerInterface/DualShockUDPClient/MotionRemoteState.h"
+ 
+ #import "Core/Config/MainSettings.h"
+ #import "Core/Config/WiimoteSettings.h"
+@@ -23,6 +33,7 @@
+ 
+ - (void)viewDidLoad {
+   [super viewDidLoad];
++  self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:@"MotionRemote" style:UIBarButtonItemStylePlain target:self action:@selector(configureMotionRemote)];
+   
+   NSString* gamecubeString = DOLCoreLocalizedStringWithArgs(@"Port %1", @"d");
+   NSString* wiiString = DOLCoreLocalizedStringWithArgs(@"Wii Remote %1", @"d");
+@@ -78,4 +89,107 @@
+   }
+ }
+ 
++- (void)configureMotionRemote {
++  UIAlertController* alert = [UIAlertController alertControllerWithTitle:@"MotionRemote" message:@"Start MotionRemote on the iPhone. Enter its Wi-Fi IPv4 address and matching player number (1–4). This configures that Wii Remote." preferredStyle:UIAlertControllerStyleAlert];
++  [alert addTextFieldWithConfigurationHandler:^(UITextField* field) {
++    field.placeholder = @"iPhone IPv4 address";
++    field.keyboardType = UIKeyboardTypeDecimalPad;
++    field.text = [[NSUserDefaults standardUserDefaults] stringForKey:@"motionremote.address"];
++  }];
++  [alert addTextFieldWithConfigurationHandler:^(UITextField* field) {
++    field.placeholder = @"Player 1–4";
++    field.keyboardType = UIKeyboardTypeNumberPad;
++    field.text = [[NSUserDefaults standardUserDefaults] stringForKey:@"motionremote.player"] ?: @"1";
++  }];
++  [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
++  for (NSNumber* overlay in @[@NO, @YES]) {
++    [alert addAction:[UIAlertAction actionWithTitle:overlay.boolValue ? @"Apply with 3D overlay" : @"Apply" style:UIAlertActionStyleDefault handler:^(UIAlertAction* action) {
++      NSString* address = [alert.textFields[0].text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
++      NSString* player = [alert.textFields[1].text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
++      struct in_addr parsed;
++      if (inet_pton(AF_INET,address.UTF8String,&parsed) != 1 || ![@[@"1",@"2",@"3",@"4"] containsObject:player]) {
++        UIAlertController* error = [UIAlertController alertControllerWithTitle:@"Check address and player" message:@"Use the iPhone’s IPv4 address and a player number from 1 to 4." preferredStyle:UIAlertControllerStyleAlert];
++        [error addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
++        [self presentViewController:error animated:YES completion:nil];
++        return;
++      }
++      [self applyMotionRemoteAddress:address player:player.intValue overlay:overlay.boolValue];
++    }]];
++  }
++  [self presentViewController:alert animated:YES completion:nil];
++}
++
++- (void)applyMotionRemoteAddress:(NSString*)address player:(int)player overlay:(BOOL)overlay {
++  const int slot = player-1;
++  const std::string name = slot == 0 ? "MotionRemote" : "MotionRemote P"+std::to_string(player);
++  namespace DSU = ciface::DualShockUDPClient;
++  {
++  auto lock = ControllerEmu::EmulatedController::GetStateLock();
++  auto* config = Wiimote::GetConfig();
++  auto* controller = config->GetController(slot);
++  const std::string backup = File::GetUserPath(D_CONFIG_IDX)+"MotionRemote-Wiimote"+std::to_string(player)+"-backup.ini";
++  if (!File::Exists(backup)) {
++    Common::IniFile previous;
++    controller->SaveConfig(previous.GetOrCreateSection("Profile"));
++    if (!previous.Save(backup)) {
++      UIAlertController* error = [UIAlertController alertControllerWithTitle:@"Settings could not be saved" message:@"The existing controller settings could not be backed up. Check available storage and try again." preferredStyle:UIAlertControllerStyleAlert];
++      [error addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
++      [self presentViewController:error animated:YES completion:nil];
++      return;
++    }
++  }
++  Common::IniFile profile;
++  auto* section = profile.GetOrCreateSection("Profile");
++  section->Set("Device","DSUClient/"+std::to_string(slot)+"/"+name);
++  section->Set("Extension",std::string("None"));
++  section->Set("IMUIR/Enabled",std::string("True"));
++  section->Set("IMUIR/Recenter",std::string("`R3`"));
++  section->Set("Buttons/A",std::string("`Cross`"));
++  section->Set("Buttons/B",std::string("`Circle`"));
++  section->Set("Buttons/1",std::string("`Square`"));
++  section->Set("Buttons/2",std::string("`Triangle`"));
++  section->Set("Buttons/-",std::string("`L1`"));
++  section->Set("Buttons/+",std::string("`R1`"));
++  section->Set("Buttons/Home",std::string("`PS`"));
++  section->Set("D-Pad/Up",std::string("`Pad N`"));
++  section->Set("D-Pad/Down",std::string("`Pad S`"));
++  section->Set("D-Pad/Left",std::string("`Pad W`"));
++  section->Set("D-Pad/Right",std::string("`Pad E`"));
++  section->Set("IMUAccelerometer/Up",std::string("`Accel Up`"));
++  section->Set("IMUAccelerometer/Down",std::string("`Accel Down`"));
++  section->Set("IMUAccelerometer/Left",std::string("`Accel Left`"));
++  section->Set("IMUAccelerometer/Right",std::string("`Accel Right`"));
++  section->Set("IMUAccelerometer/Forward",std::string("`Accel Forward`"));
++  section->Set("IMUAccelerometer/Backward",std::string("`Accel Backward`"));
++  section->Set("IMUGyroscope/Pitch Up",std::string("`Gyro Pitch Up`"));
++  section->Set("IMUGyroscope/Pitch Down",std::string("`Gyro Pitch Down`"));
++  section->Set("IMUGyroscope/Roll Left",std::string("`Gyro Roll Left`"));
++  section->Set("IMUGyroscope/Roll Right",std::string("`Gyro Roll Right`"));
++  section->Set("IMUGyroscope/Yaw Left",std::string("`Gyro Yaw Left`"));
++  section->Set("IMUGyroscope/Yaw Right",std::string("`Gyro Yaw Right`"));
++  section->Set("Rumble/Motor",std::string("`Motor`"));
++  section->Set("IMUIR/Preserve Angle",std::string("True"));
++  controller->LoadConfig(section);
++  controller->UpdateReferences(g_controller_interface);
++  config->SaveConfig();
++  }
++  Config::SetBaseOrCurrent(Config::GetInfoForWiimoteSource(slot),WiimoteSource::Emulated);
++  std::stringstream entries(Config::Get(DSU::Settings::SERVERS));
++  std::string entry,updated;
++  while (std::getline(entries,entry,';')) {
++    if (!entry.empty() && !entry.starts_with(name+":")) updated += entry+";";
++  }
++  updated += name+":"+address.UTF8String+":26760;";
++  Config::SetBaseOrCurrent(DSU::Settings::SERVERS,updated);
++  Config::SetBaseOrCurrent(DSU::Settings::SERVERS_ENABLED,true);
++  Config::Save();
++  DSU::MotionRemote::enabled.store(overlay);
++  DSU::MotionRemote::selected.store(slot);
++  [[NSUserDefaults standardUserDefaults] setObject:address forKey:@"motionremote.address"];
++  [[NSUserDefaults standardUserDefaults] setObject:[NSString stringWithFormat:@"%d",player] forKey:@"motionremote.player"];
++  UIAlertController* ready = [UIAlertController alertControllerWithTitle:@"MotionRemote configured" message:@"Open a Wii game to start receiving the iPhone’s buttons and motion. Enable JIT from Settings → JIT. Use the iPhone crosshair to recenter." preferredStyle:UIAlertControllerStyleAlert];
++  [ready addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
++  [self presentViewController:ready animated:YES completion:nil];
++}
++
+ @end
+--- a/Source/iOS/App/Common/UI/Settings/SettingsRootViewController.swift
++++ b/Source/iOS/App/Common/UI/Settings/SettingsRootViewController.swift
+@@ -9,6 +9,8 @@
+   @IBOutlet weak var coreVersionLabel: UILabel!
+   
+   override func viewDidLoad() {
++    super.viewDidLoad()
++    navigationItem.rightBarButtonItem = UIBarButtonItem(title: "JIT", style: .plain, target: self, action: #selector(openJIT))
+     let versionManager = VersionManager.shared()
+     
+     versionLabel.text = versionManager.appVersion.userFacing
+@@ -23,5 +25,9 @@
+     }
+   }
+   
++  @objc private func openJIT() {
++    present(UINavigationController(rootViewController: BuiltInJITViewController()), animated: true)
++  }
++
+   @IBAction func unwindToSettings( _ seg: UIStoryboardSegue) {}
+ }
+--- a/Source/iOS/App/DolphiniOS.xcodeproj/project.pbxproj
++++ b/Source/iOS/App/DolphiniOS.xcodeproj/project.pbxproj
+@@ -110,8 +110,6 @@
+ 		B97C49B2297E717D00E30877 /* AboutViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = B97C49B1297E717C00E30877 /* AboutViewController.m */; };
+ 		B97C49B4297E7DB600E30877 /* AnalyticsNoticeViewControllerDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = B97C49B3297E7DB600E30877 /* AnalyticsNoticeViewControllerDelegate.swift */; };
+ 		B97C49B6297F8B0D00E30877 /* UniformTypeIdentifiers.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B97C49B5297F8B0D00E30877 /* UniformTypeIdentifiers.framework */; };
+-		B97E4B492964CBA100B3EE9C /* FirebaseAnalyticsWithoutAdIdSupport in Frameworks */ = {isa = PBXBuildFile; productRef = B97E4B482964CBA100B3EE9C /* FirebaseAnalyticsWithoutAdIdSupport */; };
+-		B97E4B4B2964CBA100B3EE9C /* FirebaseCrashlytics in Frameworks */ = {isa = PBXBuildFile; productRef = B97E4B4A2964CBA100B3EE9C /* FirebaseCrashlytics */; };
+ 		B97E4B532965011C00B3EE9C /* FirebaseService.mm in Sources */ = {isa = PBXBuildFile; fileRef = B97E4B522965011C00B3EE9C /* FirebaseService.mm */; };
+ 		B97E4B5629656EC300B3EE9C /* VersionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = B97E4B5529656EC300B3EE9C /* VersionManager.swift */; };
+ 		B97E4B58296573E200B3EE9C /* DOLBuildSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = B97E4B57296573E200B3EE9C /* DOLBuildSource.swift */; };
+@@ -196,6 +194,9 @@
+ 		B9FCB7E12898D1E80020E233 /* SwiftLocalizationUtil.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9FCB7E02898D1E80020E233 /* SwiftLocalizationUtil.swift */; };
+ 		B9FCB7E42898F4D60020E233 /* JitManager+JitStreamer.m in Sources */ = {isa = PBXBuildFile; fileRef = B9FCB7E32898F4D60020E233 /* JitManager+JitStreamer.m */; };
+ 		B9FCB7E62898FAC10020E233 /* GameController.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B9FCB7E52898FAC10020E233 /* GameController.framework */; };
++		BC1000000000000000000011 = {isa = PBXBuildFile; fileRef = BC1000000000000000000001; };
++		BC1000000000000000000012 = {isa = PBXBuildFile; fileRef = BC1000000000000000000002; };
++		BC1000000000000000000013 = {isa = PBXBuildFile; fileRef = BC1000000000000000000003; };
+ /* End PBXBuildFile section */
+ 
+ /* Begin PBXContainerItemProxy section */
+@@ -577,6 +578,9 @@
+ 		B9FF01E72977DCBE00B49B00 /* TrollStore.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = TrollStore.xcconfig; sourceTree = "<group>"; };
+ 		B9FF01E82977DCF700B49B00 /* Release (TrollStore).xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = "Release (TrollStore).xcconfig"; sourceTree = "<group>"; };
+ 		B9FF01E92977DD0000B49B00 /* Release (Beta, TrollStore).xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = "Release (Beta, TrollStore).xcconfig"; sourceTree = "<group>"; };
++		BC1000000000000000000001 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Common/Jit/BuiltInJIT.swift"; sourceTree = SOURCE_ROOT; };
++		BC1000000000000000000002 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "../../../BuildSupport/JITHelper/JITProtocol.swift"; sourceTree = SOURCE_ROOT; };
++		BC1000000000000000000003 = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = "Common/Jit/JitManager+BuiltIn.mm"; sourceTree = SOURCE_ROOT; };
+ /* End PBXFileReference section */
+ 
+ /* Begin PBXFrameworksBuildPhase section */
+@@ -597,8 +601,6 @@
+ 				B9D9389E283EF7AD00B290FC /* MetalKit.framework in Frameworks */,
+ 				B9FCB7E62898FAC10020E233 /* GameController.framework in Frameworks */,
+ 				B9476B2527F23FFE009C0A4B /* libdolphin.dylib in Frameworks */,
+-				B97E4B492964CBA100B3EE9C /* FirebaseAnalyticsWithoutAdIdSupport in Frameworks */,
+-				B97E4B4B2964CBA100B3EE9C /* FirebaseCrashlytics in Frameworks */,
+ 				B900A7B527F2D3C0000361DD /* MoltenVK.xcframework in Frameworks */,
+ 				B900A7D227F5228B000361DD /* UICollectionViewLeftAlignedLayout in Frameworks */,
+ 			);
+@@ -1698,6 +1700,9 @@
+ 		B9FCB7C328976C340020E233 /* JitWait */ = {
+ 			isa = PBXGroup;
+ 			children = (
++				BC1000000000000000000001,
++				BC1000000000000000000002,
++				BC1000000000000000000003,
+ 				B9FCB7CB2897700C0020E233 /* JitWaitViewController.swift */,
+ 				B9FCB7CD2897998B0020E233 /* JitWaitViewControllerDelegate.swift */,
+ 			);
+@@ -1757,6 +1762,7 @@
+ 				B99137B428829F1400588446 /* Transfer Core Strings to Storyboard Strings */,
+ 				B9DC3DF427EFBD2C0084DAA4 /* Resources */,
+ 				B900A7A027F255E0000361DD /* CopyFiles */,
++				BC1000000000000000000020 /* Embed JIT Helper */,
+ 				B97E4B622966227B00B3EE9C /* Upload dSYM */,
+ 			);
+ 			buildRules = (
+@@ -1767,8 +1773,6 @@
+ 			packageProductDependencies = (
+ 				B900A7D127F5228B000361DD /* UICollectionViewLeftAlignedLayout */,
+ 				B9FCB7DD28988E7E0020E233 /* AltKit */,
+-				B97E4B482964CBA100B3EE9C /* FirebaseAnalyticsWithoutAdIdSupport */,
+-				B97E4B4A2964CBA100B3EE9C /* FirebaseCrashlytics */,
+ 			);
+ 			productName = DolphiniOS;
+ 			productReference = B9DC3DF627EFBD2C0084DAA4 /* DolphiniOS.app */;
+@@ -1807,7 +1811,6 @@
+ 			packageReferences = (
+ 				B900A7D027F5228B000361DD /* XCRemoteSwiftPackageReference "UICollectionViewLeftAlignedLayout" */,
+ 				B9FCB7DC28988E7E0020E233 /* XCRemoteSwiftPackageReference "AltKit" */,
+-				B97E4B472964CBA100B3EE9C /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */,
+ 			);
+ 			productRefGroup = B9DC3DF727EFBD2C0084DAA4 /* Products */;
+ 			projectDirPath = "";
+@@ -1846,10 +1849,8 @@
+ 				B99137B52882A58000588446 /* SoftwareList.storyboard in Resources */,
+ 				B9B2C623288DB62D00CB6569 /* TCSidewaysWiiPad.xib in Resources */,
+ 				B9B1483829642C75002C4BE7 /* UpdateRequiredNotice.xib in Resources */,
+-				B9EFF8572E7F5E540029F016 /* AppIconBeta_Glass.icon in Resources */,
+ 				B950CFBD296208D400197719 /* UpdateNotice.xib in Resources */,
+ 				B97E4B5A29657BCB00B3EE9C /* GoogleService-Info.plist in Resources */,
+-				B9EFF8532E7F56790029F016 /* AppIcon_Glass.icon in Resources */,
+ 				B9447B042841901200BC9110 /* TCGameCubePad.xib in Resources */,
+ 				B9447B09284192FA00BC9110 /* DolphinAssets.xcassets in Resources */,
+ 				B97C49AF297E6CFF00E30877 /* AboutSettings.storyboard in Resources */,
+@@ -1930,7 +1931,7 @@
+ 			);
+ 			runOnlyForDeploymentPostprocessing = 0;
+ 			shellPath = /bin/sh;
+-			shellScript = "\"$PROJECT_DIR/Project/Scripts/UpdateStoryboardStrings.sh\"\n";
++			shellScript = "# Use bundled upstream localizations\n";
+ 		};
+ 		B99137A428825CFA00588446 /* Update Core Strings */ = {
+ 			isa = PBXShellScriptBuildPhase;
+@@ -1950,7 +1951,7 @@
+ 			);
+ 			runOnlyForDeploymentPostprocessing = 0;
+ 			shellPath = /bin/sh;
+-			shellScript = "\"$PROJECT_DIR/venv/bin/python3\" \"$PROJECT_DIR/Project/Scripts/UpdateCoreStrings.py\" \"$PROJECT_DIR/../../../Languages/po/\" \"$PROJECT_DIR/Common/UI/Localization\"\n";
++			shellScript = "# Use bundled upstream localizations\n";
+ 		};
+ 		B99137B428829F1400588446 /* Transfer Core Strings to Storyboard Strings */ = {
+ 			isa = PBXShellScriptBuildPhase;
+@@ -1968,7 +1969,7 @@
+ 			);
+ 			runOnlyForDeploymentPostprocessing = 0;
+ 			shellPath = /bin/sh;
+-			shellScript = "\"$PROJECT_DIR/venv/bin/python3\" \"$PROJECT_DIR/Project/Scripts/TransferCoreStringsToStoryboard.py\" \"$PROJECT_DIR/DolphiniOS\" \"$PROJECT_DIR/Common/UI/Localization/\"\n";
++			shellScript = "# Use bundled upstream localizations\n";
+ 		};
+ 		B9A0EBC42DC3E1B500F929BA /* ShellScript */ = {
+ 			isa = PBXShellScriptBuildPhase;
+@@ -1985,8 +1986,20 @@
+ 			);
+ 			runOnlyForDeploymentPostprocessing = 0;
+ 			shellPath = /bin/sh;
+-			shellScript = "\"$PROJECT_DIR/Project/Scripts/SetUpPython.sh\"\n";
+-		};
++			shellScript = "# Use bundled upstream localizations\n";
++		};
++		BC1000000000000000000020 /* Embed JIT Helper */ = {
++            isa = PBXShellScriptBuildPhase;
++            buildActionMask = 2147483647;
++            files = ();
++            inputPaths = ();
++            outputPaths = ();
++            alwaysOutOfDate = 1;
++            name = "Embed JIT Helper";
++            runOnlyForDeploymentPostprocessing = 0;
++            shellPath = /bin/bash;
++            shellScript = "bash \"$SRCROOT/../../../BuildSupport/build-jit-helper.sh\"";
++        };
+ /* End PBXShellScriptBuildPhase section */
+ 
+ /* Begin PBXSourcesBuildPhase section */
+@@ -2002,6 +2015,9 @@
+ 			isa = PBXSourcesBuildPhase;
+ 			buildActionMask = 2147483647;
+ 			files = (
++				BC1000000000000000000013,
++				BC1000000000000000000012,
++				BC1000000000000000000011,
+ 				B950CFAA29616B4F00197719 /* MainSceneCoordinator.m in Sources */,
+ 				B904AD092887DAF1008B6BE9 /* ControllersTypeViewController.mm in Sources */,
+ 				B9913785288146D700588446 /* WiiAspectRatioViewController.mm in Sources */,
+@@ -2235,7 +2251,7 @@
+ 				BUNDLE_LOADER = "$(TEST_HOST)";
+ 				CLANG_ANALYZER_NONNULL = YES;
+ 				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+-				CLANG_CXX_LANGUAGE_STANDARD = "gnu++17";
++				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+ 				CLANG_ENABLE_MODULES = YES;
+ 				CLANG_ENABLE_OBJC_ARC = YES;
+ 				CLANG_ENABLE_OBJC_WEAK = YES;
+@@ -2263,7 +2279,7 @@
+ 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+ 				CODE_SIGN_STYLE = Automatic;
+ 				COPY_PHASE_STRIP = NO;
+-				CURRENT_PROJECT_VERSION = 1;
++				CURRENT_PROJECT_VERSION = 3;
+ 				DEBUG_INFORMATION_FORMAT = dwarf;
+ 				DEVELOPMENT_TEAM = 46669ZA7J4;
+ 				ENABLE_STRICT_OBJC_MSGSEND = YES;
+@@ -2283,7 +2299,7 @@
+ 				GCC_WARN_UNUSED_FUNCTION = YES;
+ 				GCC_WARN_UNUSED_VARIABLE = YES;
+ 				GENERATE_INFOPLIST_FILE = YES;
+-				IPHONEOS_DEPLOYMENT_TARGET = 14.0;
++				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+ 				LD_RUNPATH_SEARCH_PATHS = (
+ 					"$(inherited)",
+ 					"@executable_path/Frameworks",
+@@ -2313,7 +2329,7 @@
+ 				BUNDLE_LOADER = "$(TEST_HOST)";
+ 				CLANG_ANALYZER_NONNULL = YES;
+ 				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+-				CLANG_CXX_LANGUAGE_STANDARD = "gnu++17";
++				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+ 				CLANG_ENABLE_MODULES = YES;
+ 				CLANG_ENABLE_OBJC_ARC = YES;
+ 				CLANG_ENABLE_OBJC_WEAK = YES;
+@@ -2341,7 +2357,7 @@
+ 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+ 				CODE_SIGN_STYLE = Automatic;
+ 				COPY_PHASE_STRIP = NO;
+-				CURRENT_PROJECT_VERSION = 1;
++				CURRENT_PROJECT_VERSION = 3;
+ 				DEBUG_INFORMATION_FORMAT = dwarf;
+ 				DEVELOPMENT_TEAM = 46669ZA7J4;
+ 				ENABLE_STRICT_OBJC_MSGSEND = YES;
+@@ -2361,7 +2377,7 @@
+ 				GCC_WARN_UNUSED_FUNCTION = YES;
+ 				GCC_WARN_UNUSED_VARIABLE = YES;
+ 				GENERATE_INFOPLIST_FILE = YES;
+-				IPHONEOS_DEPLOYMENT_TARGET = 14.0;
++				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+ 				LD_RUNPATH_SEARCH_PATHS = (
+ 					"$(inherited)",
+ 					"@executable_path/Frameworks",
+@@ -2391,7 +2407,7 @@
+ 				BUNDLE_LOADER = "$(TEST_HOST)";
+ 				CLANG_ANALYZER_NONNULL = YES;
+ 				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+-				CLANG_CXX_LANGUAGE_STANDARD = "gnu++17";
++				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+ 				CLANG_ENABLE_MODULES = YES;
+ 				CLANG_ENABLE_OBJC_ARC = YES;
+ 				CLANG_ENABLE_OBJC_WEAK = YES;
+@@ -2419,7 +2435,7 @@
+ 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+ 				CODE_SIGN_STYLE = Automatic;
+ 				COPY_PHASE_STRIP = NO;
+-				CURRENT_PROJECT_VERSION = 1;
++				CURRENT_PROJECT_VERSION = 3;
+ 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+ 				DEVELOPMENT_TEAM = 46669ZA7J4;
+ 				ENABLE_NS_ASSERTIONS = NO;
+@@ -2433,7 +2449,7 @@
+ 				GCC_WARN_UNUSED_FUNCTION = YES;
+ 				GCC_WARN_UNUSED_VARIABLE = YES;
+ 				GENERATE_INFOPLIST_FILE = YES;
+-				IPHONEOS_DEPLOYMENT_TARGET = 14.0;
++				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+ 				LD_RUNPATH_SEARCH_PATHS = (
+ 					"$(inherited)",
+ 					"@executable_path/Frameworks",
+@@ -2462,7 +2478,7 @@
+ 				BUNDLE_LOADER = "$(TEST_HOST)";
+ 				CLANG_ANALYZER_NONNULL = YES;
+ 				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+-				CLANG_CXX_LANGUAGE_STANDARD = "gnu++17";
++				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+ 				CLANG_ENABLE_MODULES = YES;
+ 				CLANG_ENABLE_OBJC_ARC = YES;
+ 				CLANG_ENABLE_OBJC_WEAK = YES;
+@@ -2490,7 +2506,7 @@
+ 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+ 				CODE_SIGN_STYLE = Automatic;
+ 				COPY_PHASE_STRIP = NO;
+-				CURRENT_PROJECT_VERSION = 1;
++				CURRENT_PROJECT_VERSION = 3;
+ 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+ 				DEVELOPMENT_TEAM = 46669ZA7J4;
+ 				ENABLE_NS_ASSERTIONS = NO;
+@@ -2504,7 +2520,7 @@
+ 				GCC_WARN_UNUSED_FUNCTION = YES;
+ 				GCC_WARN_UNUSED_VARIABLE = YES;
+ 				GENERATE_INFOPLIST_FILE = YES;
+-				IPHONEOS_DEPLOYMENT_TARGET = 14.0;
++				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+ 				LD_RUNPATH_SEARCH_PATHS = (
+ 					"$(inherited)",
+ 					"@executable_path/Frameworks",
+@@ -2533,7 +2549,7 @@
+ 				BUNDLE_LOADER = "$(TEST_HOST)";
+ 				CLANG_ANALYZER_NONNULL = YES;
+ 				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+-				CLANG_CXX_LANGUAGE_STANDARD = "gnu++17";
++				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+ 				CLANG_ENABLE_MODULES = YES;
+ 				CLANG_ENABLE_OBJC_ARC = YES;
+ 				CLANG_ENABLE_OBJC_WEAK = YES;
+@@ -2561,7 +2577,7 @@
+ 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+ 				CODE_SIGN_STYLE = Automatic;
+ 				COPY_PHASE_STRIP = NO;
+-				CURRENT_PROJECT_VERSION = 1;
++				CURRENT_PROJECT_VERSION = 3;
+ 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+ 				DEVELOPMENT_TEAM = 46669ZA7J4;
+ 				ENABLE_NS_ASSERTIONS = NO;
+@@ -2575,7 +2591,7 @@
+ 				GCC_WARN_UNUSED_FUNCTION = YES;
+ 				GCC_WARN_UNUSED_VARIABLE = YES;
+ 				GENERATE_INFOPLIST_FILE = YES;
+-				IPHONEOS_DEPLOYMENT_TARGET = 14.0;
++				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+ 				LD_RUNPATH_SEARCH_PATHS = (
+ 					"$(inherited)",
+ 					"@executable_path/Frameworks",
+@@ -2604,7 +2620,7 @@
+ 				BUNDLE_LOADER = "$(TEST_HOST)";
+ 				CLANG_ANALYZER_NONNULL = YES;
+ 				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+-				CLANG_CXX_LANGUAGE_STANDARD = "gnu++17";
++				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+ 				CLANG_ENABLE_MODULES = YES;
+ 				CLANG_ENABLE_OBJC_ARC = YES;
+ 				CLANG_ENABLE_OBJC_WEAK = YES;
+@@ -2632,7 +2648,7 @@
+ 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+ 				CODE_SIGN_STYLE = Automatic;
+ 				COPY_PHASE_STRIP = NO;
+-				CURRENT_PROJECT_VERSION = 1;
++				CURRENT_PROJECT_VERSION = 3;
+ 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+ 				DEVELOPMENT_TEAM = 46669ZA7J4;
+ 				ENABLE_NS_ASSERTIONS = NO;
+@@ -2646,7 +2662,7 @@
+ 				GCC_WARN_UNUSED_FUNCTION = YES;
+ 				GCC_WARN_UNUSED_VARIABLE = YES;
+ 				GENERATE_INFOPLIST_FILE = YES;
+-				IPHONEOS_DEPLOYMENT_TARGET = 14.0;
++				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+ 				LD_RUNPATH_SEARCH_PATHS = (
+ 					"$(inherited)",
+ 					"@executable_path/Frameworks",
+@@ -2675,7 +2691,7 @@
+ 				BUNDLE_LOADER = "$(TEST_HOST)";
+ 				CLANG_ANALYZER_NONNULL = YES;
+ 				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+-				CLANG_CXX_LANGUAGE_STANDARD = "gnu++17";
++				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+ 				CLANG_ENABLE_MODULES = YES;
+ 				CLANG_ENABLE_OBJC_ARC = YES;
+ 				CLANG_ENABLE_OBJC_WEAK = YES;
+@@ -2703,7 +2719,7 @@
+ 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+ 				CODE_SIGN_STYLE = Automatic;
+ 				COPY_PHASE_STRIP = NO;
+-				CURRENT_PROJECT_VERSION = 1;
++				CURRENT_PROJECT_VERSION = 3;
+ 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+ 				DEVELOPMENT_TEAM = 46669ZA7J4;
+ 				ENABLE_NS_ASSERTIONS = NO;
+@@ -2717,7 +2733,7 @@
+ 				GCC_WARN_UNUSED_FUNCTION = YES;
+ 				GCC_WARN_UNUSED_VARIABLE = YES;
+ 				GENERATE_INFOPLIST_FILE = YES;
+-				IPHONEOS_DEPLOYMENT_TARGET = 14.0;
++				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+ 				LD_RUNPATH_SEARCH_PATHS = (
+ 					"$(inherited)",
+ 					"@executable_path/Frameworks",
+@@ -2746,7 +2762,7 @@
+ 				BUNDLE_LOADER = "$(TEST_HOST)";
+ 				CLANG_ANALYZER_NONNULL = YES;
+ 				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+-				CLANG_CXX_LANGUAGE_STANDARD = "gnu++17";
++				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+ 				CLANG_ENABLE_MODULES = YES;
+ 				CLANG_ENABLE_OBJC_ARC = YES;
+ 				CLANG_ENABLE_OBJC_WEAK = YES;
+@@ -2774,7 +2790,7 @@
+ 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+ 				CODE_SIGN_STYLE = Automatic;
+ 				COPY_PHASE_STRIP = NO;
+-				CURRENT_PROJECT_VERSION = 1;
++				CURRENT_PROJECT_VERSION = 3;
+ 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+ 				DEVELOPMENT_TEAM = 46669ZA7J4;
+ 				ENABLE_NS_ASSERTIONS = NO;
+@@ -2788,7 +2804,7 @@
+ 				GCC_WARN_UNUSED_FUNCTION = YES;
+ 				GCC_WARN_UNUSED_VARIABLE = YES;
+ 				GENERATE_INFOPLIST_FILE = YES;
+-				IPHONEOS_DEPLOYMENT_TARGET = 14.0;
++				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+ 				LD_RUNPATH_SEARCH_PATHS = (
+ 					"$(inherited)",
+ 					"@executable_path/Frameworks",
+@@ -2859,7 +2875,7 @@
+ 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+ 				GCC_WARN_UNUSED_FUNCTION = YES;
+ 				GCC_WARN_UNUSED_VARIABLE = YES;
+-				IPHONEOS_DEPLOYMENT_TARGET = 14.0;
++				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+ 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+ 				MTL_FAST_MATH = YES;
+ 				ONLY_ACTIVE_ARCH = YES;
+@@ -2877,7 +2893,7 @@
+ 				CLANG_ENABLE_MODULES = YES;
+ 				CODE_SIGN_ENTITLEMENTS = DolphiniOS/DolphiniOS.entitlements;
+ 				CODE_SIGN_STYLE = Automatic;
+-				CURRENT_PROJECT_VERSION = 1;
++				CURRENT_PROJECT_VERSION = 3;
+ 				GENERATE_INFOPLIST_FILE = YES;
+ 				INFOPLIST_FILE = DolphiniOS/Info.plist;
+ 				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
+@@ -2887,7 +2903,7 @@
+ 				INFOPLIST_KEY_UIMainStoryboardFile = Main;
+ 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+ 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+-				IPHONEOS_DEPLOYMENT_TARGET = 14.0;
++				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+ 				LD_RUNPATH_SEARCH_PATHS = (
+ 					"$(inherited)",
+ 					"@executable_path/Frameworks",
+@@ -2949,7 +2965,7 @@
+ 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+ 				GCC_WARN_UNUSED_FUNCTION = YES;
+ 				GCC_WARN_UNUSED_VARIABLE = YES;
+-				IPHONEOS_DEPLOYMENT_TARGET = 14.0;
++				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+ 				MTL_ENABLE_DEBUG_INFO = NO;
+ 				MTL_FAST_MATH = YES;
+ 				SDKROOT = iphoneos;
+@@ -2968,7 +2984,7 @@
+ 				CLANG_ENABLE_MODULES = YES;
+ 				CODE_SIGN_ENTITLEMENTS = DolphiniOS/DolphiniOS.entitlements;
+ 				CODE_SIGN_STYLE = Automatic;
+-				CURRENT_PROJECT_VERSION = 1;
++				CURRENT_PROJECT_VERSION = 3;
+ 				GENERATE_INFOPLIST_FILE = YES;
+ 				INFOPLIST_FILE = DolphiniOS/Info.plist;
+ 				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
+@@ -2978,7 +2994,7 @@
+ 				INFOPLIST_KEY_UIMainStoryboardFile = Main;
+ 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+ 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+-				IPHONEOS_DEPLOYMENT_TARGET = 14.0;
++				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+ 				LD_RUNPATH_SEARCH_PATHS = (
+ 					"$(inherited)",
+ 					"@executable_path/Frameworks",
+@@ -3039,7 +3055,7 @@
+ 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+ 				GCC_WARN_UNUSED_FUNCTION = YES;
+ 				GCC_WARN_UNUSED_VARIABLE = YES;
+-				IPHONEOS_DEPLOYMENT_TARGET = 14.0;
++				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+ 				MTL_ENABLE_DEBUG_INFO = NO;
+ 				MTL_FAST_MATH = YES;
+ 				SDKROOT = iphoneos;
+@@ -3058,7 +3074,7 @@
+ 				CLANG_ENABLE_MODULES = YES;
+ 				CODE_SIGN_ENTITLEMENTS = DolphiniOS/DolphiniOS.entitlements;
+ 				CODE_SIGN_STYLE = Automatic;
+-				CURRENT_PROJECT_VERSION = 1;
++				CURRENT_PROJECT_VERSION = 3;
+ 				GENERATE_INFOPLIST_FILE = YES;
+ 				INFOPLIST_FILE = DolphiniOS/Info.plist;
+ 				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
+@@ -3068,7 +3084,7 @@
+ 				INFOPLIST_KEY_UIMainStoryboardFile = Main;
+ 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+ 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+-				IPHONEOS_DEPLOYMENT_TARGET = 14.0;
++				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+ 				LD_RUNPATH_SEARCH_PATHS = (
+ 					"$(inherited)",
+ 					"@executable_path/Frameworks",
+@@ -3129,7 +3145,7 @@
+ 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+ 				GCC_WARN_UNUSED_FUNCTION = YES;
+ 				GCC_WARN_UNUSED_VARIABLE = YES;
+-				IPHONEOS_DEPLOYMENT_TARGET = 14.0;
++				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+ 				MTL_ENABLE_DEBUG_INFO = NO;
+ 				MTL_FAST_MATH = YES;
+ 				SDKROOT = iphoneos;
+@@ -3148,7 +3164,7 @@
+ 				CLANG_ENABLE_MODULES = YES;
+ 				CODE_SIGN_ENTITLEMENTS = DolphiniOS/DolphiniOS.entitlements;
+ 				CODE_SIGN_STYLE = Automatic;
+-				CURRENT_PROJECT_VERSION = 1;
++				CURRENT_PROJECT_VERSION = 3;
+ 				GENERATE_INFOPLIST_FILE = YES;
+ 				INFOPLIST_FILE = DolphiniOS/Info.plist;
+ 				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
+@@ -3158,7 +3174,7 @@
+ 				INFOPLIST_KEY_UIMainStoryboardFile = Main;
+ 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+ 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+-				IPHONEOS_DEPLOYMENT_TARGET = 14.0;
++				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+ 				LD_RUNPATH_SEARCH_PATHS = (
+ 					"$(inherited)",
+ 					"@executable_path/Frameworks",
+@@ -3221,7 +3237,7 @@
+ 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+ 				GCC_WARN_UNUSED_FUNCTION = YES;
+ 				GCC_WARN_UNUSED_VARIABLE = YES;
+-				IPHONEOS_DEPLOYMENT_TARGET = 14.0;
++				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+ 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+ 				MTL_FAST_MATH = YES;
+ 				ONLY_ACTIVE_ARCH = YES;
+@@ -3277,7 +3293,7 @@
+ 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+ 				GCC_WARN_UNUSED_FUNCTION = YES;
+ 				GCC_WARN_UNUSED_VARIABLE = YES;
+-				IPHONEOS_DEPLOYMENT_TARGET = 14.0;
++				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+ 				MTL_ENABLE_DEBUG_INFO = NO;
+ 				MTL_FAST_MATH = YES;
+ 				SDKROOT = iphoneos;
+@@ -3296,7 +3312,7 @@
+ 				CLANG_ENABLE_MODULES = YES;
+ 				CODE_SIGN_ENTITLEMENTS = DolphiniOS/DolphiniOS.entitlements;
+ 				CODE_SIGN_STYLE = Automatic;
+-				CURRENT_PROJECT_VERSION = 1;
++				CURRENT_PROJECT_VERSION = 3;
+ 				GENERATE_INFOPLIST_FILE = YES;
+ 				INFOPLIST_FILE = DolphiniOS/Info.plist;
+ 				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
+@@ -3306,7 +3322,7 @@
+ 				INFOPLIST_KEY_UIMainStoryboardFile = Main;
+ 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+ 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+-				IPHONEOS_DEPLOYMENT_TARGET = 14.0;
++				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+ 				LD_RUNPATH_SEARCH_PATHS = (
+ 					"$(inherited)",
+ 					"@executable_path/Frameworks",
+@@ -3330,7 +3346,7 @@
+ 				CLANG_ENABLE_MODULES = YES;
+ 				CODE_SIGN_ENTITLEMENTS = DolphiniOS/DolphiniOS.entitlements;
+ 				CODE_SIGN_STYLE = Automatic;
+-				CURRENT_PROJECT_VERSION = 1;
++				CURRENT_PROJECT_VERSION = 3;
+ 				GENERATE_INFOPLIST_FILE = YES;
+ 				INFOPLIST_FILE = DolphiniOS/Info.plist;
+ 				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
+@@ -3340,7 +3356,7 @@
+ 				INFOPLIST_KEY_UIMainStoryboardFile = Main;
+ 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+ 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+-				IPHONEOS_DEPLOYMENT_TARGET = 14.0;
++				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+ 				LD_RUNPATH_SEARCH_PATHS = (
+ 					"$(inherited)",
+ 					"@executable_path/Frameworks",
+@@ -3401,7 +3417,7 @@
+ 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+ 				GCC_WARN_UNUSED_FUNCTION = YES;
+ 				GCC_WARN_UNUSED_VARIABLE = YES;
+-				IPHONEOS_DEPLOYMENT_TARGET = 14.0;
++				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+ 				MTL_ENABLE_DEBUG_INFO = NO;
+ 				MTL_FAST_MATH = YES;
+ 				SDKROOT = iphoneos;
+@@ -3420,7 +3436,7 @@
+ 				CLANG_ENABLE_MODULES = YES;
+ 				CODE_SIGN_ENTITLEMENTS = DolphiniOS/DolphiniOS.entitlements;
+ 				CODE_SIGN_STYLE = Automatic;
+-				CURRENT_PROJECT_VERSION = 1;
++				CURRENT_PROJECT_VERSION = 3;
+ 				GENERATE_INFOPLIST_FILE = YES;
+ 				INFOPLIST_FILE = DolphiniOS/Info.plist;
+ 				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
+@@ -3430,7 +3446,7 @@
+ 				INFOPLIST_KEY_UIMainStoryboardFile = Main;
+ 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+ 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+-				IPHONEOS_DEPLOYMENT_TARGET = 14.0;
++				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+ 				LD_RUNPATH_SEARCH_PATHS = (
+ 					"$(inherited)",
+ 					"@executable_path/Frameworks",
+@@ -3491,7 +3507,7 @@
+ 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+ 				GCC_WARN_UNUSED_FUNCTION = YES;
+ 				GCC_WARN_UNUSED_VARIABLE = YES;
+-				IPHONEOS_DEPLOYMENT_TARGET = 14.0;
++				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+ 				MTL_ENABLE_DEBUG_INFO = NO;
+ 				MTL_FAST_MATH = YES;
+ 				SDKROOT = iphoneos;
+@@ -3510,7 +3526,7 @@
+ 				CLANG_ENABLE_MODULES = YES;
+ 				CODE_SIGN_ENTITLEMENTS = DolphiniOS/DolphiniOS.entitlements;
+ 				CODE_SIGN_STYLE = Automatic;
+-				CURRENT_PROJECT_VERSION = 1;
++				CURRENT_PROJECT_VERSION = 3;
+ 				GENERATE_INFOPLIST_FILE = YES;
+ 				INFOPLIST_FILE = DolphiniOS/Info.plist;
+ 				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
+@@ -3520,7 +3536,7 @@
+ 				INFOPLIST_KEY_UIMainStoryboardFile = Main;
+ 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+ 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+-				IPHONEOS_DEPLOYMENT_TARGET = 14.0;
++				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+ 				LD_RUNPATH_SEARCH_PATHS = (
+ 					"$(inherited)",
+ 					"@executable_path/Frameworks",
+@@ -3585,28 +3601,12 @@
+ 
+ /* Begin XCRemoteSwiftPackageReference section */
+ 		B900A7D027F5228B000361DD /* XCRemoteSwiftPackageReference "UICollectionViewLeftAlignedLayout" */ = {
+-			isa = XCRemoteSwiftPackageReference;
+-			repositoryURL = "https://github.com/OatmealDome/UICollectionViewLeftAlignedLayout";
+-			requirement = {
+-				kind = upToNextMajorVersion;
+-				minimumVersion = 1.0.0;
+-			};
+-		};
+-		B97E4B472964CBA100B3EE9C /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */ = {
+-			isa = XCRemoteSwiftPackageReference;
+-			repositoryURL = "https://github.com/firebase/firebase-ios-sdk";
+-			requirement = {
+-				kind = upToNextMajorVersion;
+-				minimumVersion = 9.0.0;
+-			};
++			isa = XCLocalSwiftPackageReference;
++			relativePath = "../../../BuildSupport/Packages/Layout";
+ 		};
+ 		B9FCB7DC28988E7E0020E233 /* XCRemoteSwiftPackageReference "AltKit" */ = {
+-			isa = XCRemoteSwiftPackageReference;
+-			repositoryURL = "https://github.com/rileytestut/AltKit.git";
+-			requirement = {
+-				kind = upToNextMajorVersion;
+-				minimumVersion = 0.0.2;
+-			};
++			isa = XCLocalSwiftPackageReference;
++			relativePath = "../../../BuildSupport/Packages/AltKit";
+ 		};
+ /* End XCRemoteSwiftPackageReference section */
+ 
+@@ -3616,16 +3616,6 @@
+ 			package = B900A7D027F5228B000361DD /* XCRemoteSwiftPackageReference "UICollectionViewLeftAlignedLayout" */;
+ 			productName = UICollectionViewLeftAlignedLayout;
+ 		};
+-		B97E4B482964CBA100B3EE9C /* FirebaseAnalyticsWithoutAdIdSupport */ = {
+-			isa = XCSwiftPackageProductDependency;
+-			package = B97E4B472964CBA100B3EE9C /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+-			productName = FirebaseAnalyticsWithoutAdIdSupport;
+-		};
+-		B97E4B4A2964CBA100B3EE9C /* FirebaseCrashlytics */ = {
+-			isa = XCSwiftPackageProductDependency;
+-			package = B97E4B472964CBA100B3EE9C /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+-			productName = FirebaseCrashlytics;
+-		};
+ 		B9FCB7DD28988E7E0020E233 /* AltKit */ = {
+ 			isa = XCSwiftPackageProductDependency;
+ 			package = B9FCB7DC28988E7E0020E233 /* XCRemoteSwiftPackageReference "AltKit" */;
+--- a/Source/iOS/App/DolphiniOS.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
++++ /dev/null
+@@ -1,131 +0,0 @@
+-{
+-  "pins" : [
+-    {
+-      "identity" : "abseil-cpp-swiftpm",
+-      "kind" : "remoteSourceControl",
+-      "location" : "https://github.com/firebase/abseil-cpp-SwiftPM.git",
+-      "state" : {
+-        "revision" : "583de9bd60f66b40e78d08599cc92036c2e7e4e1",
+-        "version" : "0.20220203.2"
+-      }
+-    },
+-    {
+-      "identity" : "altkit",
+-      "kind" : "remoteSourceControl",
+-      "location" : "https://github.com/rileytestut/AltKit.git",
+-      "state" : {
+-        "revision" : "f799f60ef6fa8b9676b4102b7dfa169fb40b6c92",
+-        "version" : "0.0.2"
+-      }
+-    },
+-    {
+-      "identity" : "boringssl-swiftpm",
+-      "kind" : "remoteSourceControl",
+-      "location" : "https://github.com/firebase/boringssl-SwiftPM.git",
+-      "state" : {
+-        "revision" : "dd3eda2b05a3f459fc3073695ad1b28659066eab",
+-        "version" : "0.9.1"
+-      }
+-    },
+-    {
+-      "identity" : "firebase-ios-sdk",
+-      "kind" : "remoteSourceControl",
+-      "location" : "https://github.com/firebase/firebase-ios-sdk",
+-      "state" : {
+-        "revision" : "7e80c25b51c2ffa238879b07fbfc5baa54bb3050",
+-        "version" : "9.6.0"
+-      }
+-    },
+-    {
+-      "identity" : "googleappmeasurement",
+-      "kind" : "remoteSourceControl",
+-      "location" : "https://github.com/google/GoogleAppMeasurement.git",
+-      "state" : {
+-        "revision" : "c1cfde8067668027b23a42c29d11c246152fe046",
+-        "version" : "9.6.0"
+-      }
+-    },
+-    {
+-      "identity" : "googledatatransport",
+-      "kind" : "remoteSourceControl",
+-      "location" : "https://github.com/google/GoogleDataTransport.git",
+-      "state" : {
+-        "revision" : "5056b15c5acbb90cd214fe4d6138bdf5a740e5a8",
+-        "version" : "9.2.0"
+-      }
+-    },
+-    {
+-      "identity" : "googleutilities",
+-      "kind" : "remoteSourceControl",
+-      "location" : "https://github.com/google/GoogleUtilities.git",
+-      "state" : {
+-        "revision" : "6db6edb48bdd9943426562c7f042a5492de5ba3d",
+-        "version" : "7.10.0"
+-      }
+-    },
+-    {
+-      "identity" : "grpc-ios",
+-      "kind" : "remoteSourceControl",
+-      "location" : "https://github.com/grpc/grpc-ios.git",
+-      "state" : {
+-        "revision" : "8440b914756e0d26d4f4d054a1c1581daedfc5b6",
+-        "version" : "1.44.3-grpc"
+-      }
+-    },
+-    {
+-      "identity" : "gtm-session-fetcher",
+-      "kind" : "remoteSourceControl",
+-      "location" : "https://github.com/google/gtm-session-fetcher.git",
+-      "state" : {
+-        "revision" : "5ccda3981422a84186387dbb763ba739178b529c",
+-        "version" : "2.3.0"
+-      }
+-    },
+-    {
+-      "identity" : "leveldb",
+-      "kind" : "remoteSourceControl",
+-      "location" : "https://github.com/firebase/leveldb.git",
+-      "state" : {
+-        "revision" : "0706abcc6b0bd9cedfbb015ba840e4a780b5159b",
+-        "version" : "1.22.2"
+-      }
+-    },
+-    {
+-      "identity" : "nanopb",
+-      "kind" : "remoteSourceControl",
+-      "location" : "https://github.com/firebase/nanopb.git",
+-      "state" : {
+-        "revision" : "819d0a2173aff699fb8c364b6fb906f7cdb1a692",
+-        "version" : "2.30909.0"
+-      }
+-    },
+-    {
+-      "identity" : "promises",
+-      "kind" : "remoteSourceControl",
+-      "location" : "https://github.com/google/promises.git",
+-      "state" : {
+-        "revision" : "3e4e743631e86c8c70dbc6efdc7beaa6e90fd3bb",
+-        "version" : "2.1.1"
+-      }
+-    },
+-    {
+-      "identity" : "swift-protobuf",
+-      "kind" : "remoteSourceControl",
+-      "location" : "https://github.com/apple/swift-protobuf.git",
+-      "state" : {
+-        "revision" : "ab3a58b7209a17d781c0d1dbb3e1ff3da306bae8",
+-        "version" : "1.20.3"
+-      }
+-    },
+-    {
+-      "identity" : "uicollectionviewleftalignedlayout",
+-      "kind" : "remoteSourceControl",
+-      "location" : "https://github.com/OatmealDome/UICollectionViewLeftAlignedLayout",
+-      "state" : {
+-        "revision" : "8cba0fc9fe5e9e7392ed0bd8c121ebd9973ff673",
+-        "version" : "1.0.4"
+-      }
+-    }
+-  ],
+-  "version" : 2
+-}
+--- a/Source/iOS/App/DolphiniOS/Info.plist
++++ b/Source/iOS/App/DolphiniOS/Info.plist
+@@ -6,6 +6,8 @@
+ 	<string>NotSet</string>
+ 	<key>CADisableMinimumFrameDurationOnPhone</key>
+ 	<true/>
++	<key>CFBundleDisplayName</key>
++	<string>DolphiniOS MotionRemote</string>
+ 	<key>CFBundleDocumentTypes</key>
+ 	<array>
+ 		<dict>
+@@ -98,7 +100,10 @@
+ 	<key>NSBonjourServices</key>
+ 	<array>
+ 		<string>_altserver._tcp</string>
+-	</array>
++		<string>_remotepairing._tcp</string>
++	</array>
++	<key>NSLocalNetworkUsageDescription</key>
++	<string>Receives your MotionRemote iPhone controller over Wi-Fi and returns game vibration.</string>
+ 	<key>UIApplicationSceneManifest</key>
+ 	<dict>
+ 		<key>UIApplicationSupportsMultipleScenes</key>
+--- a/Source/iOS/App/DolphiniOS/UI/Emulation/JitWait/JitWait.xib
++++ b/Source/iOS/App/DolphiniOS/UI/Emulation/JitWait/JitWait.xib
+@@ -51,7 +51,7 @@
+ 
+ Apple does not allow JIT to be used on iOS by default. However, by attaching a debugger, iOS will allow JIT to be used.
+ 
+-For more information, tap "Help".</string>
++Tap "JIT Setup" to import your pairing file and enable JIT with the built-in helper. Connect LocalDevVPN first.</string>
+                                     <fontDescription key="fontDescription" type="system" pointSize="17"/>
+                                     <nil key="textColor"/>
+                                     <nil key="highlightedColor"/>
+@@ -92,7 +92,7 @@
+                                                 <constraint firstAttribute="height" constant="45" id="a9Z-2E-qwn"/>
+                                             </constraints>
+                                             <fontDescription key="fontDescription" type="boldSystem" pointSize="15"/>
+-                                            <state key="normal" title="Help">
++                                            <state key="normal" title="JIT Setup">
+                                                 <color key="titleColor" white="1" alpha="1" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
+                                             </state>
+                                             <userDefinedRuntimeAttributes>
+--- a/Source/iOS/App/Project/Config/Beta.xcconfig
++++ b/Source/iOS/App/Project/Config/Beta.xcconfig
+@@ -3,4 +3,4 @@
+ 
+ DOL_PREPROCESSOR_RELEASE_CHANNEL = BETA=1
+ DOL_SWIFT_CONDITION_RELEASE_CHANNEL = BETA
+-DOL_APP_ICON_ASSET_NAME = AppIconBeta_Glass
++DOL_APP_ICON_ASSET_NAME = AppIconBeta
+--- a/Source/iOS/App/Project/Config/BundleIdentifier.xcconfig
++++ b/Source/iOS/App/Project/Config/BundleIdentifier.xcconfig
+@@ -5,7 +5,7 @@
+ // Change this line to modify the organization identifier.
+ //
+ 
+-DOL_PBID_ORGANIZATION_IDENTIFIER = use.your.own.organization.identifier
++DOL_PBID_ORGANIZATION_IDENTIFIER = com.leolange.motionremote
+ 
+ //
+ // You probably shouldn't touch anything below. (Unless you know what you're doing.)
+--- a/Source/iOS/App/Project/Config/Normal.xcconfig
++++ b/Source/iOS/App/Project/Config/Normal.xcconfig
+@@ -1,4 +1,4 @@
+ // Copyright 2023 DolphiniOS Project
+ // SPDX-License-Identifier: GPL-2.0-or-later
+ 
+-DOL_APP_ICON_ASSET_NAME = AppIcon_Glass
++DOL_APP_ICON_ASSET_NAME = AppIcon
+--- a/Source/iOS/App/Project/Scripts/BuildCore.sh
++++ b/Source/iOS/App/Project/Scripts/BuildCore.sh
+@@ -6,6 +6,12 @@
+ 
+ REPO_ROOT_DIR="$PROJECT_DIR/../../.."
+ CMAKE_BUILD_DIR="$REPO_ROOT_DIR/build-$PLATFORM_NAME-$DOL_CORE_BUILD_TARGET"
++
++CMAKE_BIN="${MOTIONREMOTE_CMAKE:-$(command -v cmake || true)}"
++if [ ! -x "$CMAKE_BIN" ]; then
++  echo "CMake is missing. Install CMake 4.1.2 or set MOTIONREMOTE_CMAKE to its executable."
++  exit 1
++fi
+ 
+ MACHINE_ARCH="$(arch)"
+ 
+@@ -43,8 +49,8 @@
+ 
+ cd "$CMAKE_BUILD_DIR"
+ 
+-if [ ! -f "$CMAKE_BUILD_DIR/build.ninja" ]; then
+-  cmake "$REPO_ROOT_DIR" -G Ninja -DCMAKE_TOOLCHAIN_FILE="$REPO_ROOT_DIR/Externals/ios-cmake/ios.toolchain.cmake" -DPLATFORM=$PLATFORM -DDEPLOYMENT_TARGET=$PLATFORM_DEPLOYMENT_TARGET -DENABLE_VISIBILITY=ON -DENABLE_BITCODE=OFF -DENABLE_ARC=ON -DCMAKE_BUILD_TYPE=$DOL_CORE_BUILD_TARGET -DCMAKE_CXX_FLAGS="-fPIC" -DIOS=ON -DENABLE_ANALYTICS=NO -DUSE_SYSTEM_LIBS=OFF -DENABLE_TESTS=OFF -DCMAKE_POLICY_VERSION_MINIMUM=3.5
++if [ ! -f "$CMAKE_BUILD_DIR/Makefile" ]; then
++  "$CMAKE_BIN" "$REPO_ROOT_DIR" -G "Unix Makefiles" -DCMAKE_TOOLCHAIN_FILE="$REPO_ROOT_DIR/Externals/ios-cmake/ios.toolchain.cmake" -DPLATFORM=$PLATFORM -DDEPLOYMENT_TARGET=$PLATFORM_DEPLOYMENT_TARGET -DENABLE_VISIBILITY=ON -DENABLE_BITCODE=OFF -DENABLE_ARC=ON -DCMAKE_BUILD_TYPE=$DOL_CORE_BUILD_TARGET -DCMAKE_CXX_FLAGS="-fPIC" -DIOS=ON -DENABLE_ANALYTICS=NO -DUSE_SYSTEM_LIBS=OFF -DENABLE_TESTS=OFF -DUSE_MGBA=OFF -DUSE_RETRO_ACHIEVEMENTS=OFF -DENABLE_AUTOUPDATE=OFF -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+ fi
+ 
+-ninja
++/usr/bin/make -j6
