@@ -14,11 +14,8 @@
 - **Bluetooth** as an alternative link. Wi-Fi is recommended: in practice it has lower latency.
 - **Smoother pointer:** late or bursty packets no longer shift it.
 - **Diagnostics logs** on the phone (Settings → Diagnostics), in Dolphin (`MotionRemote.log` in Dolphin's Logs folder) and in MotionSaber. They show, for example, whether a pause came from Wi-Fi holding packets back, packets lost on the way or the phone itself.
-- **MotionSaber 1.3 (highly experimental):** a rhythm game for the Mac with the iPhone as a sword, haptic feedback on every cut, and an automatic motion-only mode for devices or rooms where camera tracking is not available.
+- **MotionSaber 1.3 (experimental):** a rhythm game for the Mac with the iPhone as a sword, haptic feedback on every cut, and an automatic motion-only mode for devices or rooms where camera tracking is not available.
 - **MotionRemote Monitor 1.0:** live 3D view of the phone and graphs of acceleration, rotation, orientation and packet timing.
-
-> [!CAUTION]
-> **MotionSaber is highly experimental.** Hit detection and tracking in the game do not work well yet. Do not use MotionSaber as a reference for how well MotionRemote, the phone's tracking or the connection work; judge those in Dolphin and with the diagnostics logs.
 
 ## Files
 
@@ -27,7 +24,7 @@
 | `MotionRemote-1.15.ipa` | iPhone app (unsigned; sign it with your own tool) |
 | `Dolphin-MotionRemote-1.13-macOS-arm64.zip` | Dolphin for Mac (Apple Silicon, macOS 27+) |
 | `DolphiniOS-MotionRemote-1.7.ipa` | Dolphin for iPad (sign with development signing; keep the JIT helper extension) |
-| `MotionSaber-1.3-macOS-arm64.zip` | The rhythm game, highly experimental (macOS 14+) |
+| `MotionSaber-1.3-macOS-arm64.zip` | The rhythm game, experimental (macOS 14+) |
 | `MotionRemote-Monitor-1.0-macOS-arm64.zip` | Motion monitor (macOS 14+) |
 | `Dolphin-MotionRemote-1.13-source.tar.gz` | Complete source of the Mac Dolphin build (GPL-2.0-or-later) |
 | `DolphiniOS-MotionRemote-1.7-source.tar.gz` | Complete source of the iPad build, including the StikJIT 2.0.1 source (GPL / MPL-2.0) |
