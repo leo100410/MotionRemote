@@ -1,7 +1,9 @@
 import SwiftUI
 
-private let ink = Color(red:0.12,green:0.16,blue:0.21)
-private let accent = Color(red:0.04,green:0.43,blue:0.96)
+// Semantic system colours only, so the remote reads correctly in light and dark mode.
+private let accent = Color.accentColor
+// The Wii Remote's dark controls: black in light mode, graphite in dark mode so they stay dark keys.
+private let graphite = Color(UIColor { $0.userInterfaceStyle == .dark ? .systemGray3 : .label })
 
 struct RemoteKey: View {
     let title: String
@@ -11,17 +13,22 @@ struct RemoteKey: View {
     let active: Bool
     let action: (Bool) -> Void
     @State private var down = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var body: some View {
+        let fill = active ? accent : (dark ? graphite : Color(.secondarySystemGroupedBackground))
+        let ink = active || dark ? Color.white : Color(.label)
         Group {
-            if let symbol { Image(systemName:symbol).font(.system(size:20,weight:.semibold)) }
-            else { Text(title).font(.system(size:size > 70 ? 32 : 23,weight:.semibold,design:.rounded)) }
+            if let symbol { Image(systemName:symbol).font(.system(size:size*0.38,weight:.semibold)) }
+            else { Text(title).font(.system(size:size > 70 ? 32 : 23,weight:.semibold,design:.rounded)).tracking(size > 70 ? -0.6 : 0) }
         }
-        .foregroundStyle(active ? .white : (dark ? .white : ink))
+        .foregroundStyle(ink)
         .frame(width:size,height:size)
-        .background(active ? accent : (dark ? ink : .white),in:Circle())
-        .overlay(Circle().strokeBorder(.black.opacity(0.07),lineWidth:1))
-        .shadow(color:.black.opacity(active ? 0 : 0.09),radius:4,y:3)
-        .scaleEffect(active ? 0.94 : 1)
+        .background(fill,in:Circle())
+        .overlay(Circle().strokeBorder(Color(.separator).opacity(active ? 0 : 0.5),lineWidth:0.5))
+        .shadow(color:.black.opacity(active ? 0 : 0.12),radius:active ? 1 : 4,y:active ? 0 : 2)
+        // Feedback starts on touch-down. A critically damped spring keeps rapid presses interruptible.
+        .scaleEffect(active && !reduceMotion ? 0.93 : 1)
+        .animation(reduceMotion ? nil : .spring(response:0.16,dampingFraction:1),value:active)
         .overlay(TouchSurface { pressed in down = pressed; action(pressed) }.clipShape(Circle()))
         .onDisappear { if down { down = false; action(false) } }
         .accessibilityLabel(title).accessibilityAddTraits(.isButton)
@@ -35,6 +42,7 @@ struct RemoteView: View {
     @StateObject private var controller = Controller()
     @StateObject private var probe = Probe()
     @Environment(\.scenePhase) private var scene
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var settings = false
     @State private var running = false
     private func key(_ name:String, symbol:String? = nil, size:CGFloat = 50, dark:Bool = false) -> some View {
@@ -44,80 +52,48 @@ struct RemoteView: View {
     }
     var body: some View {
         GeometryReader { geometry in
-            let compact = geometry.size.height < 720
-            let cross: CGFloat = compact ? 132 : 156
-            let gap: CGFloat = compact ? 3 : 8
+            let compact = geometry.size.height < 600
+            let cross: CGFloat = compact ? 124 : 150
             VStack(spacing:0) {
-                HStack {
-                    Button { settings = true } label: {
-                        Image(systemName:"slider.horizontal.3").frame(width:44,height:44)
-                    }.accessibilityLabel("Settings")
-                    Spacer()
-                    HStack(spacing:8) {
-                        Image(systemName:"dot.radiowaves.left.and.right").foregroundStyle(accent)
-                        Text("MOTIONREMOTE").font(.system(size:13,weight:.bold,design:.rounded)).tracking(1.5)
-                    }
-                    Spacer()
-                    Button { stop() } label: {
-                        Image(systemName:"power").frame(width:44,height:44)
-                    }.accessibilityLabel("Stop controller")
-                }.foregroundStyle(ink)
-                HStack(spacing:6) {
-                    Circle().fill(running ? Color.green : Color.gray.opacity(0.5)).frame(width:6,height:6)
-                    Text(controller.status).font(.system(size:11,weight:.medium)).lineLimit(1).minimumScaleFactor(0.75)
-                }.foregroundStyle(.secondary).padding(.bottom,12)
-                HStack(spacing:4) {
-                    ForEach(["Golf","Bowling","Tennis"],id:\.self) { sport in
-                        Button {
-                            controller.button("",source:"volume-up",down:false); controller.profile = sport
-                        } label: {
-                            HStack(spacing:6) {
-                                Image(systemName:sport == "Golf" ? "flag.fill" : (sport == "Bowling" ? "figure.bowling" : "tennisball.fill"))
-                                Text(sport)
-                            }.font(.system(size:12,weight:.semibold)).frame(maxWidth:.infinity).padding(.vertical,11)
-                                .foregroundStyle(controller.profile == sport ? .white : ink.opacity(0.6))
-                                .background(controller.profile == sport ? ink : .clear,in:Capsule())
-                        }.buttonStyle(.plain)
-                    }
-                }.padding(4).background(.black.opacity(0.035),in:Capsule())
-                Spacer(minLength:gap)
+                Picker("Sport",selection:$controller.profile) {
+                    ForEach(["Golf","Bowling","Tennis"],id:\.self) { Text($0).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                // A held Volume Up belongs to the previous sport's button.
+                .onChange(of:controller.profile) { _,_ in controller.button("",source:"volume-up",down:false) }
+                Spacer(minLength:8)
                 dpad(size:cross)
-                Spacer(minLength:gap)
-                key("A",size:compact ? 72 : 88)
-                Spacer(minLength:gap)
+                Spacer(minLength:8)
+                key("A",size:compact ? 72 : 86)
+                Spacer(minLength:8)
                 HStack(spacing:32) {
                     key("-",symbol:"minus",size:44)
                     key("Home",symbol:"house.fill",size:44)
                     key("+",symbol:"plus",size:44)
                 }
-                Spacer(minLength:gap)
-                HStack(spacing:26) {
+                Spacer(minLength:8)
+                HStack(spacing:22) {
                     key("B",size:54,dark:true)
-                    VStack(alignment:.leading,spacing:3) {
-                        Text("SIDE TRIGGER").font(.system(size:9,weight:.bold)).tracking(1.4).foregroundStyle(.secondary)
-                        Label("Vol + → \(controller.trigger) · Vol − → B",systemImage:"speaker.plus.fill").font(.system(size:12,weight:.medium))
+                    VStack(alignment:.leading,spacing:2) {
+                        Text("Side buttons").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                        Text("Volume + → \(controller.trigger) · Volume − → B").font(.footnote)
                     }
                 }
-                Spacer(minLength:gap)
-                if compact {
-                    HStack(spacing:20) { key("1",size:44); key("2",size:44) }
-                } else {
-                    VStack(spacing:12) { key("1",size:44); key("2",size:44) }
-                }
-                Spacer(minLength:gap)
+                Spacer(minLength:8)
+                HStack(spacing:28) { key("1",size:44); key("2",size:44) }
+                Spacer(minLength:8)
                 HStack(spacing:8) {
                     ForEach(0..<4) { i in
-                        RoundedRectangle(cornerRadius:2).fill(i == controller.player-1 && running ? accent : accent.opacity(0.13)).frame(width:8,height:5)
+                        Capsule().fill(i == controller.player-1 && running ? accent : Color(.tertiaryLabel).opacity(0.4)).frame(width:10,height:5)
                     }
-                }.accessibilityLabel(running ? "Player \(controller.player) active" : "Controller stopped")
-                Spacer(minLength:gap)
-                footer
+                }.accessibilityElement().accessibilityLabel(running ? "Player \(controller.player) active" : "Controller stopped")
             }
-            .padding(.horizontal,24).padding(.top,4).padding(.bottom,8)
+            .padding(.horizontal,24).padding(.vertical,compact ? 8 : 14)
             .frame(width:geometry.size.width,height:geometry.size.height)
         }
-        .background(LinearGradient(colors:[Color(red:0.96,green:0.97,blue:0.98),Color(red:0.89,green:0.92,blue:0.95)],startPoint:.topLeading,endPoint:.bottomTrailing).ignoresSafeArea())
-        .preferredColorScheme(.light)
+        .background(Color(.systemGroupedBackground).ignoresSafeArea())
+        .safeAreaInset(edge:.top,spacing:0) { header }
+        .safeAreaInset(edge:.bottom,spacing:0) { footer }
         .onAppear {
             probe.spatial.onPose = { controller.updateSpatialPose($0) }
             probe.spatial.onScreen = { controller.updateScreenPose($0) }
@@ -134,73 +110,119 @@ struct RemoteView: View {
         .onChange(of:scene) { _,phase in if phase == .background { stop() } }
         .onReceive(NotificationCenter.default.publisher(for:.AVCaptureSessionWasInterrupted)) { _ in stop() }
         .sheet(isPresented:$settings) { settingsView }
-        .sheet(isPresented:$calibrationSheet) {
-            ScrollView { VStack(spacing:24) {
-                Text("Calibrate pointer").font(.title.bold())
-                ScreenCalibrationView(tracker:probe.spatial)
-                Divider()
-                Text("Connect first. Keep the rear camera uncovered and scan the room briefly.")
-                Text(controller.trackingStatus)
-                Text(controller.calibrationMessage)
-                Button("Measure again") { controller.calibrate() }
-                Button("Set screen centre") {
-                    controller.button("Zentrieren",source:"calibration",down:true)
-                    DispatchQueue.main.asyncAfter(deadline:.now()+0.2) { controller.button("Zentrieren",source:"calibration",down:false) }
-                    calibrationSheet = false
-                }.disabled(!controller.calibrationReady || !controller.trackingStatus.hasPrefix("Position tracked"))
-            }.padding() }.presentationDetents([.medium,.large])
-        }
+        .sheet(isPresented:$calibrationSheet) { calibrationView }
     }
-    private func dpad(size:CGFloat) -> some View {
-        let cell = size/3
-        return ZStack {
-            RoundedRectangle(cornerRadius:10).fill(ink).frame(width:cell,height:size)
-            RoundedRectangle(cornerRadius:10).fill(ink).frame(width:size,height:cell)
-            Circle().stroke(.white.opacity(0.15),lineWidth:1).frame(width:20,height:20)
-            ForEach(0..<4) { index in
-                let names = ["Up","Right","Down","Left"]
-                let icons = ["chevron.up","chevron.right","chevron.down","chevron.left"]
-                let x: CGFloat = index == 1 ? cell : (index == 3 ? -cell : 0)
-                let y: CGFloat = index == 2 ? cell : (index == 0 ? -cell : 0)
-                Image(systemName:icons[index]).font(.system(size:16,weight:.bold))
-                    .foregroundStyle(controller.held.contains(names[index]) ? accent : .white.opacity(0.8))
-                    .frame(width:cell,height:cell)
-                    .overlay(TouchSurface { controller.button(names[index],source:"touch-\(names[index])",down:$0) })
-                    .accessibilityLabel(names[index]).offset(x:x,y:y)
+    private var statusColor: Color {
+        !running ? Color(.tertiaryLabel) : (controller.status.hasPrefix("Connected") ? .green : .orange)
+    }
+    // Translucent bars: the remote stays the focus, navigation and status float above it.
+    private var header: some View {
+        HStack(spacing:8) {
+            Button { settings = true } label: {
+                Image(systemName:"slider.horizontal.3").font(.body.weight(.semibold)).frame(width:44,height:44)
+            }.accessibilityLabel("Settings")
+            VStack(spacing:2) {
+                Text("MotionRemote").font(.headline)
+                HStack(spacing:6) {
+                    Circle().fill(statusColor).frame(width:7,height:7)
+                    Text(controller.status).font(.caption).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.8)
+                }
+                .animation(reduceMotion ? nil : .spring(response:0.3,dampingFraction:1),value:controller.status)
             }
-        }.frame(width:size,height:size).shadow(color:ink.opacity(0.2),radius:5,y:4)
+            .frame(maxWidth:.infinity).accessibilityElement(children:.combine)
+            Button { stop() } label: {
+                Image(systemName:"power").font(.body.weight(.semibold)).frame(width:44,height:44)
+            }.accessibilityLabel("Stop controller").disabled(!running)
+        }
+        .padding(.horizontal,8).padding(.bottom,4)
+        .background(.bar)
     }
     private var footer: some View {
-        VStack(spacing:8) {
-            RecordingControls(controller:controller,library:controller.recordings,onPlayback:{stop()})
-            HStack(spacing:10) {
+        VStack(spacing:10) {
+            HStack(spacing:12) {
                 Button {
                     stop(); running = true; controller.start(); probe.start(spatial:controller.spatialEnabled)
                 } label: {
                     Label(running ? "Reconnect" : "Connect",systemImage:"antenna.radiowaves.left.and.right")
-                        .font(.system(size:14,weight:.semibold)).frame(maxWidth:.infinity).frame(height:46)
-                        .foregroundStyle(.white).background(accent,in:RoundedRectangle(cornerRadius:15))
+                        .font(.body.weight(.semibold)).frame(maxWidth:.infinity)
                 }
-                key("Zentrieren",symbol:"scope",size:46)
-                    .accessibilityLabel("Recenter pointer")
-                Button {
-                    controller.spatialEnabled = true
-                    if !running { running = true; controller.start(); probe.start(spatial:true) }
-                    calibrationSheet = true; controller.calibrate()
-                } label: {
-                    Image(systemName:"gyroscope").frame(width:46,height:46)
-                        .background(.white.opacity(0.8),in:Circle())
-                }.accessibilityLabel("Calibrate: keep phone still for one second")
-            }.buttonStyle(.plain)
+                .buttonStyle(.borderedProminent).controlSize(.large)
+                VStack(spacing:3) {
+                    key("Zentrieren",symbol:"scope",size:44).accessibilityLabel("Recenter pointer")
+                    Text("Center").font(.caption2).foregroundStyle(.secondary)
+                }
+                VStack(spacing:3) {
+                    Button {
+                        controller.spatialEnabled = true
+                        if !running { running = true; controller.start(); probe.start(spatial:true) }
+                        calibrationSheet = true; controller.calibrate()
+                    } label: {
+                        Image(systemName:"viewfinder").font(.system(size:17,weight:.semibold)).frame(width:44,height:44)
+                            .background(Color(.secondarySystemGroupedBackground),in:Circle())
+                    }.buttonStyle(.plain).accessibilityLabel("Calibrate screen and sensors")
+                    Text("Calibrate").font(.caption2).foregroundStyle(.secondary)
+                }
+            }
+            RecordingControls(controller:controller,library:controller.recordings,onPlayback:{stop()})
             HStack(spacing:8) {
-                Text(running ? "\(controller.address) · 26760" : "Ready when you are")
-                    .font(.system(size:10,weight:.medium,design:.monospaced)).foregroundStyle(.secondary).textSelection(.enabled)
+                Text(running ? "\(controller.address) · UDP 26760" : "Tap Connect to start the controller")
+                    .font(.caption2.monospaced()).foregroundStyle(.secondary).textSelection(.enabled)
                 Spacer()
                 Text("CAM").font(.system(size:8,weight:.bold)).foregroundStyle(.secondary)
                 CaptureSurface(probe:probe).frame(width:24,height:18).clipShape(RoundedRectangle(cornerRadius:4))
                     .accessibilityLabel("Local camera preview for volume trigger")
             }
         }
+        .padding(.horizontal,16).padding(.top,10).padding(.bottom,4)
+        .background(.bar)
+    }
+    private var calibrationView: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    ScreenCalibrationView(tracker:probe.spatial)
+                } header: { Text("Screen") } footer: {
+                    Text("Once calibrated, pointing at the screen centre is always straight ahead in Dolphin and MotionSaber.")
+                }
+                Section {
+                    Text(controller.trackingStatus)
+                    if !controller.calibrationMessage.isEmpty { Text(controller.calibrationMessage).foregroundStyle(.secondary) }
+                    Button("Measure Gyro Again") { controller.calibrate() }
+                    Button("Set Screen Centre") {
+                        controller.button("Zentrieren",source:"calibration",down:true)
+                        DispatchQueue.main.asyncAfter(deadline:.now()+0.2) { controller.button("Zentrieren",source:"calibration",down:false) }
+                        calibrationSheet = false
+                    }.disabled(!controller.calibrationReady || !controller.trackingStatus.hasPrefix("Position tracked"))
+                } header: { Text("Motion sensors") } footer: {
+                    Text("Keep the phone still for a second to measure the gyro. Without a screen calibration, point at the screen centre and set it here or with Center.")
+                }
+            }
+            .navigationTitle("Calibrate").navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement:.confirmationAction) { Button("Done") { calibrationSheet = false } } }
+        }
+        .presentationDetents([.medium,.large])
+    }
+    private func dpad(size:CGFloat) -> some View {
+        let cell = size/3
+        return ZStack {
+            RoundedRectangle(cornerRadius:10).fill(graphite).frame(width:cell,height:size)
+            RoundedRectangle(cornerRadius:10).fill(graphite).frame(width:size,height:cell)
+            Circle().stroke(.white.opacity(0.2),lineWidth:1).frame(width:20,height:20)
+            ForEach(0..<4) { index in
+                let names = ["Up","Right","Down","Left"]
+                let icons = ["chevron.up","chevron.right","chevron.down","chevron.left"]
+                let x: CGFloat = index == 1 ? cell : (index == 3 ? -cell : 0)
+                let y: CGFloat = index == 2 ? cell : (index == 0 ? -cell : 0)
+                let pressed = controller.held.contains(names[index])
+                Image(systemName:icons[index]).font(.system(size:16,weight:.bold))
+                    .foregroundStyle(pressed ? accent : .white.opacity(0.85))
+                    .scaleEffect(pressed && !reduceMotion ? 0.85 : 1)
+                    .animation(reduceMotion ? nil : .spring(response:0.16,dampingFraction:1),value:pressed)
+                    .frame(width:cell,height:cell)
+                    .overlay(TouchSurface { controller.button(names[index],source:"touch-\(names[index])",down:$0) })
+                    .accessibilityLabel(names[index]).offset(x:x,y:y)
+            }
+        }.frame(width:size,height:size).shadow(color:.black.opacity(0.18),radius:5,y:3)
     }
     private var settingsView: some View {
         NavigationStack {
@@ -292,7 +314,6 @@ private struct ScreenCalibrationView: View {
     @ObservedObject var tracker: SpatialTracker
     var body: some View {
         VStack(alignment:.leading,spacing:12) {
-            Text("Screen calibration").font(.headline)
             Text("Touch the left edge of the Mac screen at middle height with the phone’s top camera corner, then tap Mark left edge. Repeat on the right edge. The room is saved, so this is needed once per desk.")
                 .font(.footnote)
             Text(tracker.hasLiDAR ? "LiDAR available: tracking starts quickly." : "No LiDAR: camera tracking still works. Move the phone slowly for a few seconds after starting.")
@@ -302,7 +323,7 @@ private struct ScreenCalibrationView: View {
                 Button("Mark left edge") { tracker.mark() }.disabled(!tracker.canMark || tracker.leftMarked)
                 Button("Mark right edge") { tracker.mark() }.disabled(!tracker.canMark || !tracker.leftMarked)
             }.buttonStyle(.borderedProminent)
-            Button("Forget screen calibration",role:.destructive) { tracker.forget() }.disabled(!tracker.calibrated)
+            Button("Forget Saved Room",role:.destructive) { tracker.forget() }.disabled(!tracker.hasSavedRoom)
         }.frame(maxWidth:.infinity,alignment:.leading)
     }
 }

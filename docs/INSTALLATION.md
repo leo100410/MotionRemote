@@ -1,6 +1,6 @@
 # Installation
 
-Release 1.15: MotionRemote 1.15 for iPhone, Dolphin MotionRemote 1.13 for Mac, DolphiniOS MotionRemote 1.7 for iPad, MotionSaber 1.3 and MotionRemote Monitor 1.0.
+MotionRemote 1.17 for iPhone ([release v1.17](https://github.com/leo100410/MotionRemote/releases/tag/v1.17)); Dolphin MotionRemote 1.13 for Mac, DolphiniOS MotionRemote 1.7 for iPad, MotionSaber 1.3 and MotionRemote Monitor 1.0 ([release v1.15](https://github.com/leo100410/MotionRemote/releases/tag/v1.15)).
 
 > [!WARNING]
 > **Turn off AirDrop and Handoff on the Mac and the iPhone while playing.** They make Wi-Fi pause about once per second, which causes a regular stutter. See the [README](../README.md) for the measurements and where to switch them off.
@@ -9,7 +9,7 @@ Release 1.15: MotionRemote 1.15 for iPhone, Dolphin MotionRemote 1.13 for Mac, D
 
 The distributed IPA is **unsigned**. It cannot be installed by opening it directly on an iPhone.
 
-Import `MotionRemote-1.15.ipa` into your signing tool, sign it with a valid certificate and provisioning profile for your device, then install it. You supply the signing credentials; none are included here. Alternatively, [build the app in Xcode](BUILDING.md) and run it with your own development team.
+Import `MotionRemote-1.17.ipa` into your signing tool, sign it with a valid certificate and provisioning profile for your device, then install it. You supply the signing credentials; none are included here. Alternatively, [build the app in Xcode](BUILDING.md) and run it with your own development team.
 
 Launch MotionRemote and allow Camera, Motion, Local Network and (for Bluetooth) Bluetooth access. Switching away from the app stops the controller.
 
@@ -50,6 +50,8 @@ Screen calibration tells the phone where your screen is in the room. Pointing at
 2. Move the phone slowly for a moment until tracking is normal (the buttons become active). Without LiDAR this can take a few seconds longer.
 3. Hold the **top corner of the phone where the camera is** against the **left edge of the Mac screen**, at about half height. The rear camera must stay uncovered and see the room (pointing down at the desk or to the side is fine). Tap **Mark left edge**. The phone vibrates briefly.
 4. Do the same on the **right edge** and tap **Mark right edge**.
+
+If the phone keeps looking for a saved room that it does not recognise (for example after moving the Mac), tap **Forget Saved Room** and calibrate again.
 
 How you turn the phone does not matter, as long as the same corner touches the edge both times. Do not hold the camera against the screen like taking a photo: the phone measures the corner, and a covered camera loses tracking. If you mark the edges in the wrong order, the phone corrects it automatically.
 

@@ -11,6 +11,9 @@ final class SpatialTracker: NSObject, ObservableObject, ARSessionDelegate {
     @Published private(set) var canMark = false
     @Published private(set) var leftMarked = false
     @Published private(set) var calibrated = false
+    // A saved room exists or is being searched for; forgetting it must work in either case.
+    @Published private(set) var hasSavedRoom = false
+    private var roomStored = false
     private var active = false
     private var origin: SIMD3<Float>?
     private var epoch: UInt32 = 0
@@ -34,6 +37,8 @@ final class SpatialTracker: NSObject, ObservableObject, ARSessionDelegate {
         super.init()
         session.delegate = self
         session.delegateQueue = .main
+        roomStored = FileManager.default.fileExists(atPath:roomURL.path)
+        hasSavedRoom = roomStored
     }
     func start() {
         guard ARWorldTrackingConfiguration.isSupported else {
@@ -82,10 +87,11 @@ final class SpatialTracker: NSObject, ObservableObject, ARSessionDelegate {
     func forget() {
         for anchor in session.currentFrame?.anchors ?? [] where Self.width(of:anchor) != nil { session.remove(anchor:anchor) }
         screen = nil; left = nil; savePending = false; loadedRoom = false; relocalizingSince = nil
-        do { if FileManager.default.fileExists(atPath:roomURL.path) { try FileManager.default.removeItem(at:roomURL) } }
+        do { if FileManager.default.fileExists(atPath:roomURL.path) { try FileManager.default.removeItem(at:roomURL) }; roomStored = false }
         catch { appLog.write("CALIBRATION","Could not delete the saved room: \(error.localizedDescription)") }
         appLog.write("CALIBRATION","Screen calibration and saved room deleted")
-        publish()
+        // A session started with the old room keeps searching for it; start fresh so the edges can be marked.
+        if active { start() } else { publish() }
     }
     private var now: Double { ProcessInfo.processInfo.systemUptime }
     private func replaceAnchor(_ transform: simd_float4x4, width: Float) {
@@ -124,7 +130,7 @@ final class SpatialTracker: NSObject, ObservableObject, ARSessionDelegate {
                     let data = try NSKeyedArchiver.archivedData(withRootObject:map,requiringSecureCoding:true)
                     try FileManager.default.createDirectory(at:self.roomURL.deletingLastPathComponent(),withIntermediateDirectories:true)
                     try data.write(to:self.roomURL,options:.atomic)
-                    self.savePending = false
+                    self.savePending = false; self.roomStored = true
                     appLog.write("CALIBRATION","Room saved (\(data.count/1024) KB, \(map.rawFeaturePoints.points.count) feature points). The next start restores the calibration automatically.")
                 } catch { appLog.write("CALIBRATION","Saving the room failed: \(error.localizedDescription)") }
                 self.publish()
@@ -220,7 +226,10 @@ final class SpatialTracker: NSObject, ObservableObject, ARSessionDelegate {
     private func publish() {
         let status: String
         if !active { status = "Camera tracking off — the game uses motion only" }
-        else if loadedRoom && screen == nil { status = reason == .normal ? "Recognising saved room — look around the desk" : (reason ?? .initializing).text }
+        else if loadedRoom && screen == nil {
+            status = warnedRelocalizing ? "Saved room not recognised. Look around the desk, or tap Forget Saved Room and calibrate again."
+                : (reason == .normal || reason == .relocalizing ? "Recognising saved room — look around the desk" : (reason ?? .initializing).text)
+        }
         else if reason != .normal { status = (reason ?? .initializing).text }
         else if left != nil { status = "Left edge marked. Touch the right edge, then tap Mark right edge." }
         else if let screen { status = String(format:"Screen calibrated · %.1f cm wide%@",screen.width*100,savePending ? " · saving room…" : " · room saved") }
@@ -229,5 +238,7 @@ final class SpatialTracker: NSObject, ObservableObject, ARSessionDelegate {
         if canMark != (camera != nil) { canMark = camera != nil }
         if leftMarked != (left != nil) { leftMarked = left != nil }
         if calibrated != (screen != nil) { calibrated = screen != nil }
+        let saved = roomStored || screen != nil || loadedRoom
+        if hasSavedRoom != saved { hasSavedRoom = saved }
     }
 }

@@ -13,7 +13,7 @@ Custom iPad/iPhone build based on DolphiniOS v5.0.0b6. The app is named **Dolphi
 
 The selected Wii Remote is set to emulated mode and receives the MotionRemote profile automatically. Other configured DSU server entries are preserved. The first previous controller configuration is saved under the app's Config directory as `MotionRemote-WiimoteN-backup.ini`.
 
-Use MotionRemote iPhone 1.15. Enable game rumble in the phone settings for Wii rumble. Camera stabilization, screen calibration and the spatial overlay require the iPhone's camera-tracking option. The phone stores one calibrated screen; calibrating the iPad replaces a Mac calibration. Dolphin writes `MotionRemote.log` to its Logs folder with connection and tracking diagnostics.
+Use MotionRemote iPhone 1.17. Enable game rumble in the phone settings for Wii rumble. Camera stabilization, screen calibration and the spatial overlay require the iPhone's camera-tracking option. The phone stores one calibrated screen; calibrating the iPad replaces a Mac calibration. Dolphin writes `MotionRemote.log` to its Logs folder with connection and tracking diagnostics.
 
 ## Build and checks
 

@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.17 (iPhone)
+
+- Redesigned controller screen: adapts to light and dark mode, instant spring feedback on every button (none with Reduce Motion), translucent top and bottom bars, a standard sport picker and labelled Center and Calibrate buttons.
+- The calibration sheet is a clear form with Screen and Motion sensors sections.
+- Fix: **Forget Saved Room** works while the phone is still looking for a saved room it does not recognise, and restarts camera tracking so the screen edges can be marked again.
+- Dolphin, DolphiniOS, MotionSaber and Monitor are unchanged; use the files from release 1.15.
+
 ## 1.15 (iPhone) · Dolphin 1.13 (Mac) · DolphiniOS 1.7 (iPad) · MotionSaber 1.3 · Monitor 1.0
 
 - **Turn off AirDrop and Handoff while playing.** Measurements showed that their periodic Wi-Fi pauses caused the remaining stutter.

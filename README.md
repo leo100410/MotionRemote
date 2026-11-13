@@ -16,13 +16,13 @@ Use an iPhone as a motion controller for Dolphin on Mac or iPad. An experimental
 >
 > Switch them back on after playing if you need them.
 
-[Download v1.15](https://github.com/leo100410/MotionRemote/releases/tag/v1.15) · [Installation](docs/INSTALLATION.md) · [iPad](docs/IPADOS.md) · [MotionSaber](docs/MOTIONSABER.md) · [Build from source](docs/BUILDING.md) · [How it works](docs/ARCHITECTURE.md)
+[Download](https://github.com/leo100410/MotionRemote/releases/latest) · [Installation](docs/INSTALLATION.md) · [iPad](docs/IPADOS.md) · [MotionSaber](docs/MOTIONSABER.md) · [Build from source](docs/BUILDING.md) · [How it works](docs/ARCHITECTURE.md)
 
 ## What is included
 
-| Download | What it is |
+| App | What it is |
 | --- | --- |
-| **MotionRemote 1.15** (iPhone) | The controller app: Wii Remote buttons, volume-button trigger, motion, camera tracking and screen calibration |
+| **MotionRemote 1.17** (iPhone) | The controller app: Wii Remote buttons, volume-button trigger, motion, camera tracking and screen calibration |
 | **Dolphin MotionRemote 1.13** (Mac) | Dolphin 2609b with a connection window, game rumble, screen-calibrated pointing and diagnostics |
 | **DolphiniOS MotionRemote 1.7** (iPad) | The same controller support for DolphiniOS, with built-in JIT activation |
 | **MotionSaber 1.3** (Mac) | Experimental: a small rhythm game where the iPhone is the sword ([details](docs/MOTIONSABER.md)) |
