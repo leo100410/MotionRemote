@@ -56,6 +56,23 @@ enum DSU {
         for i in 0..<4 { put(pose.orientation[i].bitPattern,52+i*4,&b) }
         finish(&b); return b
     }
+    // MotionRemote extension for the Mac monitor: the fused Core Motion attitude.
+    static func attitude(_ q: SIMD4<Float>, timestamp: UInt64, slot: UInt8, identity: Identity) -> [UInt8] {
+        var b = packet(0x100006,size:48,identity:identity)
+        b[20] = slot; put(timestamp,24,&b)
+        for i in 0..<4 { put((q[i].isFinite ? q[i] : 0).bitPattern,32+i*4,&b) }
+        finish(&b); return b
+    }
+    static func screen(_ pose: ScreenPose, slot: UInt8, identity: Identity) -> [UInt8] {
+        var b = packet(0x100007,size:68,identity:identity)
+        b[20] = slot; b[21] = pose.tracking; b[22] = pose.reason.rawValue
+        b[23] = (pose.calibrated ? 1 : 0) | (pose.relocalizing ? 2 : 0) | (pose.lidar ? 4 : 0)
+        put(pose.sequence,24,&b); put(UInt64(max(0,pose.timestamp)*1_000_000),28,&b)
+        put((pose.width.isFinite ? pose.width : 0).bitPattern,36,&b)
+        for i in 0..<3 { put((pose.position[i].isFinite ? pose.position[i] : 0).bitPattern,40+i*4,&b) }
+        for i in 0..<4 { put((pose.orientation[i].isFinite ? pose.orientation[i] : 0).bitPattern,52+i*4,&b) }
+        finish(&b); return b
+    }
     static func finish(_ b: inout [UInt8]) { put(UInt32(0),8,&b); put(crc(b),8,&b) }
     static func valid(_ b: [UInt8]) -> Bool {
         guard b.count >= 20, b.count <= 1024, Array(b[0..<4]) == Array("DSUC".utf8), get(b,4,2) <= 1001, Int(get(b,6,2))+16 == b.count else { return false }

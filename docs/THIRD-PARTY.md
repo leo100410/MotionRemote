@@ -6,7 +6,7 @@ MotionRemote began as a modification of [Coolerwave/AimMac](https://github.com/C
 
 ## Dolphin
 
-The custom emulator is based on [Dolphin 2609b](https://github.com/dolphin-emu/dolphin/tree/2609b), licensed under GPL-2.0-or-later. `LICENSES/Dolphin-COPYING.txt` contains its license. The complete MotionRemote changes to upstream source are in `DolphinBuild/motionremote-1.8.patch`; the upstream project includes additional dependency notices under `LICENSES` and `Externals`.
+The custom emulator is based on [Dolphin 2609b](https://github.com/dolphin-emu/dolphin/tree/2609b), licensed under GPL-2.0-or-later. `LICENSES/Dolphin-COPYING.txt` contains its license. The complete MotionRemote changes to upstream source are in `DolphinBuild/motionremote-1.13.patch`; the upstream project includes additional dependency notices under `LICENSES` and `Externals`.
 
 When distributing the custom emulator binary, distribute its matching source and build instructions as well. A matching source archive is prepared alongside the local release files. Preserve all applicable dependency notices.
 
@@ -22,7 +22,7 @@ Apple frameworks are supplied by iOS/macOS and are not redistributed here. No Ni
 
 ## DolphiniOS and built-in StikJIT
 
-The separate iPad release is based on [DolphiniOS v5.0.0b6](https://github.com/OatmealDome/dolphin-ios/tree/v5.0.0b6), under GPL-2.0-or-later. Its corresponding source archive includes the patched emulator, dependency source trees, project files and build instructions. `DolphiniOS/motionremote-ipados-1.2.patch` makes the changes reviewable in this repository. Original notices and dependency licenses remain in the source archive.
+The separate iPad release is based on [DolphiniOS v5.0.0b6](https://github.com/OatmealDome/dolphin-ios/tree/v5.0.0b6), under GPL-2.0-or-later. Its corresponding source archive includes the patched emulator, dependency source trees, project files and build instructions. `DolphiniOS/motionremote-ipados-1.7.patch` makes the changes reviewable in this repository. Original notices and dependency licenses remain in the source archive.
 
 [StikJIT 2.0.1](https://github.com/StikDebug/StikJIT/releases/tag/2.0.1) is MPL-2.0 licensed. The unmodified iOS framework is embedded for the helper process only. Its license is included in the IPA, under `DolphiniOS/BuildSupport/JITHelper/StikJIT-LICENSE`, and in the full source archive. The exact upstream StikJIT source release is retained as `BuildSupport/StikJIT-2.0.1-source.tar.gz` within the corresponding source archive.
 

@@ -30,6 +30,7 @@ struct RemoteKey: View {
 }
 
 struct RemoteView: View {
+    @StateObject private var internetTest = InternetTest()
     @State private var calibrationSheet = false
     @StateObject private var controller = Controller()
     @StateObject private var probe = Probe()
@@ -119,6 +120,7 @@ struct RemoteView: View {
         .preferredColorScheme(.light)
         .onAppear {
             probe.spatial.onPose = { controller.updateSpatialPose($0) }
+            probe.spatial.onScreen = { controller.updateScreenPose($0) }
             probe.onEvent = { channel,phase in
                 guard running else { return }
                 controller.volumeEvent(channel:channel,phase:phase)
@@ -129,12 +131,14 @@ struct RemoteView: View {
             controller.button("",source:"volume-down",down:false)
             if running { probe.stop(); probe.start(spatial:controller.spatialEnabled) }
         }
-        .onChange(of:scene) { _,phase in if phase != .active { stop() } }
+        .onChange(of:scene) { _,phase in if phase == .background { stop() } }
         .onReceive(NotificationCenter.default.publisher(for:.AVCaptureSessionWasInterrupted)) { _ in stop() }
         .sheet(isPresented:$settings) { settingsView }
         .sheet(isPresented:$calibrationSheet) {
-            VStack(spacing:24) {
+            ScrollView { VStack(spacing:24) {
                 Text("Calibrate pointer").font(.title.bold())
+                ScreenCalibrationView(tracker:probe.spatial)
+                Divider()
                 Text("Connect first. Keep the rear camera uncovered and scan the room briefly.")
                 Text(controller.trackingStatus)
                 Text(controller.calibrationMessage)
@@ -144,7 +148,7 @@ struct RemoteView: View {
                     DispatchQueue.main.asyncAfter(deadline:.now()+0.2) { controller.button("Zentrieren",source:"calibration",down:false) }
                     calibrationSheet = false
                 }.disabled(!controller.calibrationReady || !controller.trackingStatus.hasPrefix("Position tracked"))
-            }.padding().presentationDetents([.medium])
+            }.padding() }.presentationDetents([.medium,.large])
         }
     }
     private func dpad(size:CGFloat) -> some View {
@@ -201,6 +205,21 @@ struct RemoteView: View {
     private var settingsView: some View {
         NavigationStack {
             Form {
+                Section("Connections") {
+                    Toggle("Allow Bluetooth connections",isOn:$controller.bluetoothEnabled).disabled(running)
+                    BluetoothStatus(controller:controller.bluetooth)
+                    LabeledContent("Phone in Dolphin",value:controller.discoveryName)
+                    Text("Press Connect on this phone. On the Mac open Options → MotionRemote Connections; on the iPad open Settings → Controllers → Connections. Select this phone over Wi-Fi or Bluetooth. Player profiles are applied automatically.")
+                    Text("Bluetooth pairing may require confirmation on both devices. Keep the app open. Stop the controller before changing Bluetooth settings.")
+                }
+                Section("Network test") {
+                    Text(internetTest.status)
+                    Text(internetTest.result).font(.footnote)
+                    Button(internetTest.running ? "Cancel Internet test" : "Test Internet ping & speed") {
+                        if internetTest.running { internetTest.cancel() } else { internetTest.start() }
+                    }
+                    Text("The optional test sends up to 10 MB to/from Cloudflare over Wi-Fi. Pause gameplay while testing. Dolphin's controller-link test measures the actual phone connection and compares Wi-Fi with Bluetooth.").font(.footnote)
+                }
                 Section("Multiplayer") {
                     Picker("Player",selection:$controller.player) {
                         ForEach(1...4,id:\.self) { Text("Player \($0)").tag($0) }
@@ -224,7 +243,7 @@ struct RemoteView: View {
                     Text("Golf and Tennis use A. Bowling uses B. Hold the side button to hold the game button; release to let go.")
                 }
                 Section("Dolphin setup") {
-                    Text("Connect your Mac and iPhone to the same Wi-Fi. Enable Dolphin’s DSU Client and add this phone’s DSU server name and address with port 26760. Load the matching MotionRemote profile for this player’s Emulated Wii Remote. Repeat for each phone with its own player number.")
+                    Text("Use the new Connections menu to discover and connect automatically. Manual DSU setup is still available for older Dolphin builds on UDP 26760.")
                     LabeledContent("Phone address",value:controller.address.isEmpty ? "Connect to show address" : controller.address)
                 }
                 Section("Spatial overlay") {
@@ -232,6 +251,10 @@ struct RemoteView: View {
                     Text(controller.trackingStatus)
                     Text("Uses ARKit to measure a real 3D path relative to your starting point. Keep the rear camera uncovered and the room well lit. Tracking pauses when the camera cannot locate the phone. No camera images are sent to the Mac.")
                     Text("Enable Options → MotionRemote overlay in Dolphin MotionRemote Overlay. If Volume Up does not respond in this mode, use on-screen A/B or switch camera position tracking off.")
+                }
+                Section("Diagnostics") {
+                    ShareLink("Share current log",item:appLog.url)
+                    Text("Every session writes a log that explains connection, tracking and calibration problems. All logs are also in the Files app under On My iPhone → MotionRemote → Logs.").font(.footnote)
                 }
                 Section("Motion") {
                     Text("Keep your phone flat and still for one second when calibrating. Point at the middle of the screen and tap the crosshair to recenter.")
@@ -256,5 +279,30 @@ private struct TouchSurface: UIViewRepresentable {
         override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) { action?(true) }
         override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) { action?(false) }
         override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) { action?(false) }
+    }
+}
+
+private struct BluetoothStatus: View {
+    @ObservedObject var controller: BluetoothController
+    var body: some View { LabeledContent("Bluetooth",value:controller.status) }
+}
+
+// The virtual sensor bar: the phone learns where the screen is once and keeps it with the saved room.
+private struct ScreenCalibrationView: View {
+    @ObservedObject var tracker: SpatialTracker
+    var body: some View {
+        VStack(alignment:.leading,spacing:12) {
+            Text("Screen calibration").font(.headline)
+            Text("Touch the left edge of the Mac screen at middle height with the phone’s top camera corner, then tap Mark left edge. Repeat on the right edge. The room is saved, so this is needed once per desk.")
+                .font(.footnote)
+            Text(tracker.hasLiDAR ? "LiDAR available: tracking starts quickly." : "No LiDAR: camera tracking still works. Move the phone slowly for a few seconds after starting.")
+                .font(.footnote).foregroundStyle(.secondary)
+            Text(tracker.screenStatus).font(.callout.weight(.semibold))
+            HStack {
+                Button("Mark left edge") { tracker.mark() }.disabled(!tracker.canMark || tracker.leftMarked)
+                Button("Mark right edge") { tracker.mark() }.disabled(!tracker.canMark || !tracker.leftMarked)
+            }.buttonStyle(.borderedProminent)
+            Button("Forget screen calibration",role:.destructive) { tracker.forget() }.disabled(!tracker.calibrated)
+        }.frame(maxWidth:.infinity,alignment:.leading)
     }
 }

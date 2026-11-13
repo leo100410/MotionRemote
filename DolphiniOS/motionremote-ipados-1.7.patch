@@ -1,5 +1,5 @@
---- a/Source/Core/Common/MemoryUtil_iOS_LuckTXM.cpp
-+++ b/Source/Core/Common/MemoryUtil_iOS_LuckTXM.cpp
+--- a/Source/Core/Common/MemoryUtil_iOS_LuckTXM.cpp	2026-06-20 01:29:15
++++ b/Source/Core/Common/MemoryUtil_iOS_LuckTXM.cpp	2026-11-11 11:57:44
 @@ -34,7 +34,7 @@
    const size_t size = EXECUTABLE_REGION_SIZE;
    u8* rx_ptr = static_cast<u8*>(mmap(nullptr, size, PROT_READ | PROT_EXEC, MAP_ANON | MAP_PRIVATE, -1, 0));
@@ -9,8 +9,8 @@
    {
      PanicAlertFmt("AllocateExecutableMemoryRegion failed! mmap returned {}", LastStrerrorString());
      return;
---- /dev/null
-+++ b/Source/Core/Core/HW/WiimoteEmu/CameraPointer.h
+--- a/Source/Core/Core/HW/WiimoteEmu/CameraPointer.h	1970-01-01 01:00:00
++++ b/Source/Core/Core/HW/WiimoteEmu/CameraPointer.h	2026-11-11 10:50:39
 @@ -0,0 +1,33 @@
 +#pragma once
 +#include <array>
@@ -45,8 +45,8 @@
 + state->rotation*=Common::Quaternion::RotateZ(std::clamp(yaw,-max_yaw,max_yaw)-yaw);
 +}
 +}
---- a/Source/Core/Core/HW/WiimoteEmu/Dynamics.cpp
-+++ b/Source/Core/Core/HW/WiimoteEmu/Dynamics.cpp
+--- a/Source/Core/Core/HW/WiimoteEmu/Dynamics.cpp	2026-06-20 01:29:15
++++ b/Source/Core/Core/HW/WiimoteEmu/Dynamics.cpp	2026-11-11 10:50:39
 @@ -317,34 +317,33 @@
      return;
    }
@@ -57,40 +57,36 @@
 +
    const auto gyro_rotation = GetRotationFromGyroscope(*ang_vel * -1 * time_elapsed);
 -  state->rotation = gyro_rotation * state->rotation;
--
--  // If we have some non-zero accel data use it to adjust gyro drift.
 +  rotation = gyro_rotation * rotation;
-+
+ 
+-  // If we have some non-zero accel data use it to adjust gyro drift.
    const auto accel_weight = imu_ir_group->GetAccelWeight();
 -  auto const accel = imu_accelerometer_group->GetState().value_or(Common::Vec3{});
 -  if (accel.LengthSquared())
 -    state->rotation = ComplementaryFilter(state->rotation, accel, accel_weight);
--
--  // Clamp yaw within configured bounds.
 +  const auto accel = imu_accelerometer_group->GetState().value_or(Common::Vec3{});
 +  if (accel.LengthSquared() && !state->camera_valid)
 +    rotation = ComplementaryFilter(rotation, accel, accel_weight);
-+
-+  if (imu_ir_group->controls[0]->GetState<bool>())
-+  {
-+    state->recentered_pitch = GetPitch(rotation);
-+    rotation *= Common::Quaternion::RotateZ(-GetYaw(rotation));
-+  }
-+
-+  // Only constrain the displayed pointer; preserve the overshoot in the physical state.
-+  state->rotation = rotation;
-   const auto yaw = GetYaw(state->rotation);
-   const auto max_yaw = float(imu_ir_group->GetTotalYaw() / 2);
+ 
+-  // Clamp yaw within configured bounds.
+-  const auto yaw = GetYaw(state->rotation);
+-  const auto max_yaw = float(imu_ir_group->GetTotalYaw() / 2);
 -  auto target_yaw = std::clamp(yaw, -max_yaw, max_yaw);
 -
 -  // Handle the "Recenter" button being pressed.
--  if (imu_ir_group->controls[0]->GetState<bool>())
--  {
+   if (imu_ir_group->controls[0]->GetState<bool>())
+   {
 -    state->recentered_pitch = GetPitch(state->rotation);
 -    target_yaw = 0;
--  }
--
++    state->recentered_pitch = GetPitch(rotation);
++    rotation *= Common::Quaternion::RotateZ(-GetYaw(rotation));
+   }
+ 
 -  // Adjust yaw as needed.
++  // Only constrain the displayed pointer; preserve the overshoot in the physical state.
++  state->rotation = rotation;
++  const auto yaw = GetYaw(state->rotation);
++  const auto max_yaw = float(imu_ir_group->GetTotalYaw() / 2);
 +  const auto target_yaw = std::clamp(yaw, -max_yaw, max_yaw);
    if (yaw != target_yaw)
      state->rotation *= Common::Quaternion::RotateZ(target_yaw - yaw);
@@ -102,8 +98,8 @@
  }
  
  void ApproachPositionWithJerk(PositionalState* state, const Common::Vec3& position_target,
---- a/Source/Core/Core/HW/WiimoteEmu/Dynamics.h
-+++ b/Source/Core/Core/HW/WiimoteEmu/Dynamics.h
+--- a/Source/Core/Core/HW/WiimoteEmu/Dynamics.h	2026-06-20 01:29:15
++++ b/Source/Core/Core/HW/WiimoteEmu/Dynamics.h	2026-11-11 10:50:39
 @@ -43,7 +43,13 @@
  {
    // Rotation of world around device.
@@ -118,15 +114,16 @@
    float recentered_pitch = {};
  };
  
---- a/Source/Core/Core/HW/WiimoteEmu/WiimoteEmu.cpp
-+++ b/Source/Core/Core/HW/WiimoteEmu/WiimoteEmu.cpp
-@@ -1,3 +1,5 @@
+--- a/Source/Core/Core/HW/WiimoteEmu/WiimoteEmu.cpp	2026-06-20 01:29:15
++++ b/Source/Core/Core/HW/WiimoteEmu/WiimoteEmu.cpp	2026-11-13 23:35:49
+@@ -1,3 +1,6 @@
 +#include "InputCommon/ControllerInterface/DualShockUDPClient/MotionRemoteState.h"
 +#include "Core/HW/WiimoteEmu/CameraPointer.h"
++#include "InputCommon/ControllerInterface/DualShockUDPClient/MotionRemoteLog.h"
  // Copyright 2010 Dolphin Emulator Project
  // SPDX-License-Identifier: GPL-2.0-or-later
  
-@@ -836,6 +838,27 @@
+@@ -836,6 +839,49 @@
    EmulateShake(&m_shake_state, m_shake, 1.f / ::Wiimote::UPDATE_FREQ);
    EmulateIMUCursor(&m_imu_cursor_state, m_imu_ir, m_imu_accelerometer, m_imu_gyroscope,
                     1.f / ::Wiimote::UPDATE_FREQ);
@@ -139,10 +136,32 @@
 +    if (slot >= 0 && slot < 4)
 +    {
 +      const auto& pose = poses[slot];
-+      ApplyCameraPointer(&m_imu_cursor_state, pose.orientation, pose.epoch,
-+          pose.tracking == 2 && MR::Now()-pose.pose_at < 0.3 && MR::Now()-pose.input_at < 1,
-+          m_imu_ir->controls[0]->GetState<bool>(), float(m_imu_ir->GetTotalYaw()/2),
-+          1.f / ::Wiimote::UPDATE_FREQ);
++      const double now = MR::Now();
++      const bool screen = pose.screen_calibrated && pose.screen_tracking == 2 && now-pose.screen_at < 0.3 && now-pose.input_at < 1;
++      if (screen)
++      {
++        // The phone knows where the screen is: pointing at its centre (top edge forward, display up)
++        // is always straight ahead, so no recentering. Same math as a perfect recenter in the camera mode.
++        m_imu_cursor_state.camera_reference = Common::Quaternion(0.70710678f, -0.70710678f, 0, 0);
++        m_imu_cursor_state.camera_centered = true;
++        m_imu_cursor_state.camera_epoch = MR::ScreenEpoch;
++        ApplyCameraPointer(&m_imu_cursor_state, pose.screen_orientation, MR::ScreenEpoch, true, false,
++            float(m_imu_ir->GetTotalYaw()/2), 1.f / ::Wiimote::UPDATE_FREQ);
++      }
++      else
++      {
++        ApplyCameraPointer(&m_imu_cursor_state, pose.orientation, pose.epoch,
++            pose.tracking == 2 && now-pose.pose_at < 0.3 && now-pose.input_at < 1,
++            m_imu_ir->controls[0]->GetState<bool>(), float(m_imu_ir->GetTotalYaw()/2),
++            1.f / ::Wiimote::UPDATE_FREQ);
++      }
++      const int source = screen ? 2 : (m_imu_cursor_state.camera_valid ? 1 : 0);
++      if (const int previous = MR::SetPointerSource(slot, source); previous != source && now-pose.input_at < 1)
++      {
++        static const char* names[] = {"gyro only (recenter with the crosshair)", "camera, relative to the last recenter", "camera, screen-calibrated"};
++        MRLog::Write(now, "TRACKING", fmt::format("Player {}: pointer source {} → {}{}", slot+1, previous < 0 ? "none" : names[previous], names[source],
++            screen || !pose.screen_calibrated ? "" : fmt::format(" ({})", MR::ReasonText(pose.screen_reason))), fmt::format("pointer{}-{}", slot, source), 2);
++      }
 +    }
 +  }
 +  else
@@ -154,8 +173,23 @@
  }
  
  Common::Vec3 Wiimote::GetAcceleration(Common::Vec3 extra_acceleration) const
---- a/Source/Core/InputCommon/ControllerEmu/ControlGroup/IMUCursor.cpp
-+++ b/Source/Core/InputCommon/ControllerEmu/ControlGroup/IMUCursor.cpp
+--- a/Source/Core/InputCommon/CMakeLists.txt	2026-06-20 01:29:15
++++ b/Source/Core/InputCommon/CMakeLists.txt	2026-11-12 11:50:37
+@@ -223,3 +223,12 @@
+   target_link_libraries(inputcommon PUBLIC Hidapi::Hidapi)
+   target_compile_definitions(inputcommon PRIVATE -DHAVE_HIDAPI=1)
+ endif()
++
++if(APPLE)
++  target_sources(inputcommon PRIVATE ControllerInterface/DualShockUDPClient/MRConnections.mm)
++  target_link_libraries(inputcommon PRIVATE "-framework CoreBluetooth")
++endif()
++
++if(IOS)
++  target_link_libraries(inputcommon PRIVATE "-framework UIKit")
++endif()
+--- a/Source/Core/InputCommon/ControllerEmu/ControlGroup/IMUCursor.cpp	2026-06-20 01:29:15
++++ b/Source/Core/InputCommon/ControllerEmu/ControlGroup/IMUCursor.cpp	2026-11-11 10:50:39
 @@ -27,6 +27,9 @@
  #endif
  {
@@ -166,18 +200,20 @@
  
    // Default values chosen to reach screen edges in most games including the Wii Menu.
  
-@@ -60,4 +63,9 @@
+@@ -58,6 +61,11 @@
+ ControlState IMUCursor::GetAccelWeight() const
+ {
    return m_accel_weight_setting.GetValue() / 100;
- }
- 
++}
++
 +bool IMUCursor::GetPreserveAngle() const
 +{
 +  return m_preserve_angle_setting.GetValue();
-+}
-+
+ }
+ 
  }  // namespace ControllerEmu
---- a/Source/Core/InputCommon/ControllerEmu/ControlGroup/IMUCursor.h
-+++ b/Source/Core/InputCommon/ControllerEmu/ControlGroup/IMUCursor.h
+--- a/Source/Core/InputCommon/ControllerEmu/ControlGroup/IMUCursor.h	2026-06-20 01:29:15
++++ b/Source/Core/InputCommon/ControllerEmu/ControlGroup/IMUCursor.h	2026-11-11 10:50:39
 @@ -20,8 +20,10 @@
    ControlState GetTotalYaw() const;
  
@@ -189,19 +225,63 @@
    SettingValue<double> m_yaw_setting;
    SettingValue<double> m_accel_weight_setting;
  };
---- a/Source/Core/InputCommon/ControllerInterface/DualShockUDPClient/DualShockUDPClient.cpp
-+++ b/Source/Core/InputCommon/ControllerInterface/DualShockUDPClient/DualShockUDPClient.cpp
-@@ -5,6 +5,9 @@
+--- a/Source/Core/InputCommon/ControllerInterface/DualShockUDPClient/BluetoothWire.h	1970-01-01 01:00:00
++++ b/Source/Core/InputCommon/ControllerInterface/DualShockUDPClient/BluetoothWire.h	2026-11-12 11:49:17
+@@ -0,0 +1,38 @@
++#pragma once
++// SPDX-License-Identifier: GPL-2.0-or-later
++#include <cstdint>
++#include <vector>
++#include <map>
++#include <optional>
++#include <utility>
++#include <algorithm>
++namespace MRWire {
++using Bytes=std::vector<std::uint8_t>;
++inline std::vector<Bytes> Frames(const Bytes& data,std::uint8_t route,std::uint8_t sequence,std::size_t mtu) {
++  if(route>=16 || data.empty() || data.size()>1024 || mtu<=4)return {};
++  const auto size=mtu-4,count=(data.size()+size-1)/size;
++  if(count>64)return {};
++  std::vector<Bytes> result;
++  for(std::size_t i=0;i<count;++i) {
++    Bytes frame{route,sequence,static_cast<std::uint8_t>(i),static_cast<std::uint8_t>(count)};
++    frame.insert(frame.end(),data.begin()+i*size,data.begin()+std::min(data.size(),(i+1)*size));result.push_back(std::move(frame));
++  }
++  return result;
++}
++class Decoder {
++  struct Part {std::uint8_t id,count,next;double time;Bytes data;};
++  std::map<std::uint8_t,Part> parts;
++public:
++  std::optional<std::pair<std::uint8_t,Bytes>> Accept(const Bytes& b,double now) {
++    if(b.size()<=4 || b[0]>=16 || b[3]==0 || b[3]>64 || b[2]>=b[3])return {};
++    std::erase_if(parts,[now](const auto& p){return now-p.second.time>=0.25;});
++    if(b[2]==0)parts[b[0]]={b[1],b[3],0,now,{}};
++    auto it=parts.find(b[0]);if(it==parts.end())return {};
++    auto& p=it->second;
++    if(p.id!=b[1] || p.count!=b[3] || p.next!=b[2] || p.data.size()+b.size()-4>1024) {parts.erase(it);return {};}
++    p.data.insert(p.data.end(),b.begin()+4,b.end());++p.next;
++    if(p.next==p.count) {auto result=std::make_pair(b[0],std::move(p.data));parts.erase(it);return result;}
++    return {};
++  }
++};
++}
+--- a/Source/Core/InputCommon/ControllerInterface/DualShockUDPClient/DualShockUDPClient.cpp	2026-06-20 01:29:15
++++ b/Source/Core/InputCommon/ControllerInterface/DualShockUDPClient/DualShockUDPClient.cpp	2026-11-13 23:35:49
+@@ -5,6 +5,12 @@
  
  #include <algorithm>
  #include <array>
 +#include <atomic>
 +#include <cmath>
 +#include "InputCommon/ControllerInterface/DualShockUDPClient/MotionRemoteState.h"
++#include "InputCommon/ControllerInterface/DualShockUDPClient/GyroAccumulator.h"
++#include "InputCommon/ControllerInterface/DualShockUDPClient/MotionRemoteLog.h"
++#include "Common/FileUtil.h"
  #include <chrono>
  #include <tuple>
  
-@@ -43,6 +46,39 @@
+@@ -43,6 +49,60 @@
  // Clock type used for querying timeframes
  using SteadyClock = std::chrono::steady_clock;
  
@@ -238,14 +318,34 @@
 +#pragma pack(pop)
 +static_assert(sizeof(MotionRemotePose) == 68);
 +
++// MotionRemote extension: the phone's orientation in its calibrated screen frame, with the tracking reason.
++#pragma pack(push, 1)
++struct MotionRemoteScreen
++{
++  static constexpr auto FROM = Proto::SERVER;
++  static constexpr auto TYPE = 0x100007U;
++  Proto::MessageHeader header;
++  u32 message_type;
++  u8 pad_id;
++  u8 tracking;
++  u8 reason;
++  u8 flags; // 1 calibrated, 2 recognising saved room, 4 LiDAR
++  u32 sequence;
++  u64 timestamp_us;
++  float width;
++  std::array<float,3> position;
++  std::array<float,4> orientation;
++};
++#pragma pack(pop)
++static_assert(sizeof(MotionRemoteScreen) == 68);
++
  class Device final : public Core::Device
  {
  private:
-@@ -97,6 +133,19 @@
- 
+@@ -98,6 +158,19 @@
    using AccelerometerInput = MotionInput;
    using GyroInput = MotionInput;
-+
+ 
 +  class RumbleOutput final : public Output
 +  {
 +  public:
@@ -258,33 +358,77 @@
 +  private:
 +    std::atomic<float>& m_strength;
 +  };
- 
++
    class BatteryInput final : public Input
    {
-@@ -157,6 +206,10 @@
+   public:
+@@ -144,6 +217,7 @@
+   sf::UdpSocket m_socket;
+   SteadyClock::time_point m_next_reregister = SteadyClock::time_point::min();
+   Proto::MessageType::PadDataResponse m_pad_data{};
++  SteadyClock::time_point m_last_pad_data = SteadyClock::time_point::min();
+   Proto::Touch m_prev_touch{};
+   bool m_prev_touch_valid = false;
+   int m_touch_x = 0;
+@@ -157,6 +231,18 @@
    s16 m_touch_y_max = 0;
  
    const u32 m_client_uid;
 +  std::atomic<float> m_rumble{0.0f};
 +  u32 m_rumble_sequence = 0;
 +  SteadyClock::time_point m_next_rumble = SteadyClock::time_point::min();
++  // Player index for MotionRemote state; the phone slot (m_index) may be shared by several phones.
++  int m_mr_slot = -1;
++  MRLog::Link m_link;
++  int m_screen_reason = -1;
++  int m_screen_calibrated = -1;
++  MRGyro::Accumulator m_gyro;
++  std::array<float, 3> m_gyro_out{};
++  SteadyClock::time_point m_last_wii_poll{};
 +
  };
  
  using MathUtil::GRAVITY_ACCELERATION;
-@@ -521,6 +574,11 @@
+@@ -166,6 +252,9 @@
+ constexpr int TOUCH_Y_AXIS_MAX = 500;
+ constexpr auto THREAD_MAX_WAIT_INTERVAL = std::chrono::milliseconds{250};
+ constexpr auto SERVER_UNRESPONSIVE_INTERVAL = std::chrono::seconds{1};  // Can be 0
++// A lost port reply over radio would remove and re-add every DSU device, stalling all players.
++// MotionRemote devices already release their inputs after 250 ms without pad data.
++constexpr auto MOTIONREMOTE_UNRESPONSIVE_INTERVAL = std::chrono::seconds{5};
+ constexpr u32 SERVER_ASKED_PADS = 4;
+ 
+ struct Server
+@@ -313,7 +402,10 @@
+ 
+           if (auto port_info = msg.CheckAndCastTo<Proto::MessageType::PortInfo>())
+           {
+-            server.m_disconnect_time = SteadyClock::now() + SERVER_UNRESPONSIVE_INTERVAL;
++            server.m_disconnect_time =
++                SteadyClock::now() + (server.m_description.starts_with("MotionRemote") ?
++                                          MOTIONREMOTE_UNRESPONSIVE_INTERVAL :
++                                          SERVER_UNRESPONSIVE_INTERVAL);
+             // We have receive at least one valid update, that's enough. This is needed to avoid
+             // false positive when checking for disconnection in case our thread waited too long
+             timed_out_servers[i] = false;
+@@ -521,7 +613,16 @@
        m_server_port{server_port}, m_client_uid(client_uid)
  {
    m_socket.setBlocking(false);
 +  if (m_name.starts_with("MotionRemote")) {
 +    AddOutput(new RumbleOutput(m_rumble));
-+    MotionRemote::Reset(m_index);
++    m_mr_slot = m_name == "MotionRemote" ? 0 : m_name.back() - '1';
++    MotionRemote::Reset(m_mr_slot);
++    MRLog::Open(File::GetUserPath(D_LOGS_IDX) + "MotionRemote.log");
++    m_link.player = m_mr_slot + 1;
++    MRLog::Write(MotionRemote::Now(), "LINK", fmt::format("Player {}: phone device ready ({}:{}, phone slot {})", m_link.player, m_server_address, m_server_port, m_index + 1));
 +  }
-+
  
++
    AddInput(new AnalogInput<u8>("Pad W", m_pad_data.button_dpad_left_analog, 255));
    AddInput(new AnalogInput<u8>("Pad S", m_pad_data.button_dpad_down_analog, 255));
-@@ -617,6 +675,19 @@
+   AddInput(new AnalogInput<u8>("Pad E", m_pad_data.button_dpad_right_analog, 255));
+@@ -617,6 +718,19 @@
  {
    // Regularly tell the UDP server to feed us controller data
    const auto now = SteadyClock::now();
@@ -294,7 +438,7 @@
 +    Proto::Message<MotionRemoteRumble> msg(m_client_uid);
 +    msg.m_message.pad_id = static_cast<u8>(m_index);
 +    msg.m_message.strength = static_cast<u8>(m_rumble.load() * 255.0f);
-+    MotionRemote::Rumble(m_index,m_rumble.load());
++    MotionRemote::Rumble(m_mr_slot,m_rumble.load());
 +    msg.m_message.sequence = ++m_rumble_sequence;
 +    msg.Finish();
 +    if (const auto address = sf::IpAddress::resolve(m_server_address))
@@ -304,27 +448,726 @@
    if (now >= m_next_reregister)
    {
      m_next_reregister = now + SERVER_REREGISTER_INTERVAL;
-@@ -641,9 +712,17 @@
+@@ -641,9 +755,44 @@
    while (m_socket.receive(&msg, sizeof msg, received_bytes, sender, port) ==
           sf::Socket::Status::Done)
    {
++    if (m_name.starts_with("MotionRemote") && received_bytes==sizeof(MotionRemoteScreen) && msg.m_message.message_type==MotionRemoteScreen::TYPE)
++    {
++      if (auto screen=msg.CheckAndCastTo<MotionRemoteScreen>(); screen && screen->header.message_length==52 &&
++          screen->pad_id==m_index && screen->header.source_uid==m_pad_data.header.source_uid)
++      {
++        const bool calibrated = screen->flags & 1;
++        MotionRemote::Screen(m_mr_slot,screen->tracking,screen->reason,calibrated,screen->orientation);
++        const double at = MotionRemote::Now();
++        if (screen->reason != m_screen_reason)
++          MRLog::Write(at, "TRACKING", fmt::format("Player {}: phone reports: {}", m_link.player, MotionRemote::ReasonText(screen->reason)), fmt::format("reason{}-{}", m_link.player, screen->reason), 2);
++        if (int(calibrated) != m_screen_calibrated)
++          MRLog::Write(at, "CALIBRATION", calibrated ? fmt::format("Player {}: phone has a screen calibration ({:.1f} cm wide)", m_link.player, screen->width * 100) :
++                                                       fmt::format("Player {}: no screen calibration{}; pointer needs recentering", m_link.player, screen->flags & 2 ? " yet (recognising the saved room)" : ""));
++        m_screen_reason = screen->reason; m_screen_calibrated = calibrated;
++      }
++      continue;
++    }
 +    if (m_name.starts_with("MotionRemote") && received_bytes==sizeof(MotionRemotePose) && msg.m_message.message_type==MotionRemotePose::TYPE)
 +    {
 +      if (auto pose=msg.CheckAndCastTo<MotionRemotePose>(); pose && pose->header.message_length==52 &&
 +          pose->pad_id==m_index && pose->header.source_uid==m_pad_data.header.source_uid)
-+        MotionRemote::Pose(m_index,pose->tracking,pose->epoch,pose->sequence,pose->timestamp_us,pose->position,pose->orientation);
++        MotionRemote::Pose(m_mr_slot,pose->tracking,pose->epoch,pose->sequence,pose->timestamp_us,pose->position,pose->orientation);
 +      continue;
 +    }
      if (auto pad_data = msg.CheckAndCastTo<Proto::MessageType::PadDataResponse>())
      {
++      // A hybrid link delivers every packet on both transports; only the first copy counts.
++      if (m_name.starts_with("MotionRemote") &&
++          !m_gyro.Accept(pad_data->hid_packet_counter, pad_data->accelerometer_timestamp_us,
++                         {pad_data->gyro_pitch_deg_s, pad_data->gyro_yaw_deg_s,
++                          pad_data->gyro_roll_deg_s},
++                         std::chrono::duration<double>(now.time_since_epoch()).count()))
++        continue;
++      if (m_name.starts_with("MotionRemote"))
++        m_link.Packet(MotionRemote::Now(), pad_data->hid_packet_counter, pad_data->accelerometer_timestamp_us);
        m_pad_data = *pad_data;
-+      if (m_name.starts_with("MotionRemote")) MotionRemote::Input(m_index);
++      m_last_pad_data = now;
++      if (m_name.starts_with("MotionRemote")) MotionRemote::Input(m_mr_slot);
  
        // Update touch pad relative coordinates
        if (m_pad_data.touch1.id != m_prev_touch.id)
---- /dev/null
-+++ b/Source/Core/InputCommon/ControllerInterface/DualShockUDPClient/MotionRemoteState.h
-@@ -0,0 +1,70 @@
+@@ -659,6 +808,30 @@
+       m_prev_touch_valid = true;
+     }
+   }
++
++  if (m_name.starts_with("MotionRemote"))
++  {
++    m_link.Tick(MotionRemote::Now());
++    // Wii Remote polls pay out the accumulated rotation, so late or bursty packets do not
++    // shift the pointer. Without such polls (menus, paused game) the latest sample is shown.
++    if (ControllerInterface::GetCurrentInputChannel() == ciface::InputChannel::Bluetooth)
++    {
++      m_last_wii_poll = now;
++      m_gyro_out = m_gyro.Discharge();
++    }
++    else if (now - m_last_wii_poll > std::chrono::milliseconds{250})
++    {
++      m_gyro.Clear();
++      m_gyro_out = m_gyro.Raw();
++    }
++    m_pad_data.gyro_pitch_deg_s = m_gyro_out[0];
++    m_pad_data.gyro_yaw_deg_s = m_gyro_out[1];
++    m_pad_data.gyro_roll_deg_s = m_gyro_out[2];
++  }
++
++  if (m_name.starts_with("MotionRemote") && m_last_pad_data != SteadyClock::time_point::min() &&
++      now - m_last_pad_data > std::chrono::milliseconds{250})
++    m_pad_data = {};
+ 
+   return Core::DeviceRemoval::Keep;
+ }
+--- a/Source/Core/InputCommon/ControllerInterface/DualShockUDPClient/GyroAccumulator.h	1970-01-01 01:00:00
++++ b/Source/Core/InputCommon/ControllerInterface/DualShockUDPClient/GyroAccumulator.h	2026-11-12 15:19:25
+@@ -0,0 +1,41 @@
++#pragma once
++// SPDX-License-Identifier: GPL-2.0-or-later
++#include <algorithm>
++#include <array>
++#include <cmath>
++#include <cstdint>
++namespace MRGyro {
++// Keeps the rotation of every sample: packets that arrive late, in a burst or twice (second
++// transport) add rate x phone time to a debt, which is paid out in bounded steps per poll.
++class Accumulator {
++public:
++  static constexpr double PollRate=200,MaxStep=10,MaxDebt=180,MaxGap=0.1,Restart=1;
++  // False for a duplicate or older packet. Times are seconds (now) and microseconds (phone).
++  bool Accept(std::uint32_t number,std::uint64_t timestamp_us,const std::array<float,3>& rate,double now) {
++    // The phone counter starts again with the app, so a silent second accepts any number.
++    const bool restart=!m_seen || now-m_last>=Restart;
++    if(!restart) {const std::uint32_t d=number-m_number;if(d==0 || d>=0x80000000u)return false;}
++    const double dt=!restart && timestamp_us>m_timestamp?std::min((timestamp_us-m_timestamp)/1e6,MaxGap):0;
++    for(int i=0;i<3;++i) {
++      m_raw[i]=std::isfinite(rate[i])?rate[i]:0;
++      m_debt[i]=std::clamp(m_debt[i]+m_raw[i]*dt,-MaxDebt,MaxDebt);
++    }
++    m_seen=true;m_number=number;m_timestamp=timestamp_us;m_last=now;return true;
++  }
++  // Degrees per second to report for one 1/PollRate step.
++  std::array<float,3> Discharge() {
++    std::array<float,3> out{};
++    for(int i=0;i<3;++i) {const double step=std::clamp(m_debt[i],-MaxStep,MaxStep);m_debt[i]-=step;out[i]=static_cast<float>(step*PollRate);}
++    return out;
++  }
++  void Clear() {m_debt={};}
++  const std::array<float,3>& Raw() const {return m_raw;}
++private:
++  std::array<double,3> m_debt{};
++  std::array<float,3> m_raw{};
++  std::uint32_t m_number=0;
++  std::uint64_t m_timestamp=0;
++  double m_last=0;
++  bool m_seen=false;
++};
++}
+--- a/Source/Core/InputCommon/ControllerInterface/DualShockUDPClient/LinkQuality.h	1970-01-01 01:00:00
++++ b/Source/Core/InputCommon/ControllerInterface/DualShockUDPClient/LinkQuality.h	2026-11-12 11:53:27
+@@ -0,0 +1,25 @@
++#pragma once
++// SPDX-License-Identifier: GPL-2.0-or-later
++#include <vector>
++#include <cmath>
++namespace MRLink {
++struct Quality {
++  double average=999,jitter=0,loss=100;
++  int received=0;
++  double Score() const {return average+jitter*2+loss*5;}
++  bool Useful() const {return received>=20;}
++  bool Poor() const {return loss>5 || average>75 || jitter>30;}
++};
++inline Quality Measure(const std::vector<double>& samples,int requested) {
++  Quality q;if(requested<=0 || samples.size()>static_cast<size_t>(requested))return q;
++  double sum=0,differences=0,previous=-1;
++  for(double value:samples) {
++    if(!std::isfinite(value) || value<0)return Quality{};
++    sum+=value;if(previous>=0)differences+=std::abs(value-previous);previous=value;
++  }
++  q.received=static_cast<int>(samples.size());q.loss=100.0*(requested-q.received)/requested;
++  if(q.received)q.average=sum/q.received;
++  if(q.received>1)q.jitter=differences/(q.received-1);
++  return q;
++}
++}
+--- a/Source/Core/InputCommon/ControllerInterface/DualShockUDPClient/MRConnections.h	1970-01-01 01:00:00
++++ b/Source/Core/InputCommon/ControllerInterface/DualShockUDPClient/MRConnections.h	2026-11-12 11:45:34
+@@ -0,0 +1,3 @@
++#pragma once
++// SPDX-License-Identifier: GPL-2.0-or-later
++void MotionRemoteShowConnections(void* presenter = nullptr);
+--- a/Source/Core/InputCommon/ControllerInterface/DualShockUDPClient/MRConnections.mm	1970-01-01 01:00:00
++++ b/Source/Core/InputCommon/ControllerInterface/DualShockUDPClient/MRConnections.mm	2026-11-13 23:35:49
+@@ -0,0 +1,452 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++#include "InputCommon/ControllerInterface/DualShockUDPClient/MRConnections.h"
++#import <Foundation/Foundation.h>
++#import <CoreBluetooth/CoreBluetooth.h>
++#import <TargetConditionals.h>
++#if TARGET_OS_IPHONE
++#import <UIKit/UIKit.h>
++#else
++#import <AppKit/AppKit.h>
++#endif
++#include <arpa/inet.h>
++#include <sys/socket.h>
++#include <poll.h>
++#include <unistd.h>
++#include "Common/FileUtil.h"
++#include "Common/IniFile.h"
++#include "Common/Config/Config.h"
++#include "Core/Config/WiimoteSettings.h"
++#include "Core/HW/Wiimote.h"
++#include "InputCommon/InputConfig.h"
++#include "InputCommon/ControllerEmu/ControllerEmu.h"
++#include "InputCommon/ControllerInterface/ControllerInterface.h"
++#include "InputCommon/ControllerInterface/DualShockUDPClient/DualShockUDPClient.h"
++#include "InputCommon/ControllerInterface/DualShockUDPClient/MotionRemoteState.h"
++#include "InputCommon/ControllerInterface/DualShockUDPClient/BluetoothWire.h"
++#include "InputCommon/ControllerInterface/DualShockUDPClient/LinkQuality.h"
++#include <sstream>
++
++static NSString* const MRService=@"AE904FB0-21B6-46C5-ACB3-186947A6B100";
++static NSString* const MRRx=@"AE904FB0-21B6-46C5-ACB3-186947A6B101";
++static NSString* const MRTx=@"AE904FB0-21B6-46C5-ACB3-186947A6B102";
++static double MRNow() { return NSProcessInfo.processInfo.systemUptime; }
++static NSString* MRApply(NSString* address,int port,int player,int pad,bool overlay) {
++  if(player<1 || player>4 || pad<0 || pad>3 || port<1 || port>65535)return @"Invalid player or port.";
++  in_addr parsed{};
++  if(inet_pton(AF_INET,address.UTF8String,&parsed)!=1)return @"Use an IPv4 address.";
++  const int slot=player-1;
++  const std::string name=slot==0?"MotionRemote":"MotionRemote P"+std::to_string(player);
++  auto* config=Wiimote::GetConfig();
++  {
++    auto lock=ControllerEmu::EmulatedController::GetStateLock();
++    auto* controller=config->GetController(slot);
++    const auto backup=File::GetUserPath(D_CONFIG_IDX)+"MotionRemote-Wiimote"+std::to_string(player)+"-backup.ini";
++    if(!File::Exists(backup)) {
++      Common::IniFile previous;controller->SaveConfig(previous.GetOrCreateSection("Profile"));
++      if(!previous.Save(backup))return @"Could not back up existing controller settings.";
++    }
++    Common::IniFile profile;auto* section=profile.GetOrCreateSection("Profile");
++    // The device index is the phone's own slot; the name carries the player Dolphin assigned.
++    section->Set("Device","DSUClient/"+std::to_string(pad)+"/"+name);
++    section->Set("Extension",std::string("None"));
++    section->Set("IMUIR/Enabled",std::string("True"));
++    section->Set("IMUIR/Recenter",std::string("`R3`"));
++    section->Set("Buttons/A",std::string("`Cross`"));
++    section->Set("Buttons/B",std::string("`Circle`"));
++    section->Set("Buttons/1",std::string("`Square`"));
++    section->Set("Buttons/2",std::string("`Triangle`"));
++    section->Set("Buttons/-",std::string("`L1`"));
++    section->Set("Buttons/+",std::string("`R1`"));
++    section->Set("Buttons/Home",std::string("`PS`"));
++    section->Set("D-Pad/Up",std::string("`Pad N`"));
++    section->Set("D-Pad/Down",std::string("`Pad S`"));
++    section->Set("D-Pad/Left",std::string("`Pad W`"));
++    section->Set("D-Pad/Right",std::string("`Pad E`"));
++    section->Set("IMUAccelerometer/Up",std::string("`Accel Up`"));
++    section->Set("IMUAccelerometer/Down",std::string("`Accel Down`"));
++    section->Set("IMUAccelerometer/Left",std::string("`Accel Left`"));
++    section->Set("IMUAccelerometer/Right",std::string("`Accel Right`"));
++    section->Set("IMUAccelerometer/Forward",std::string("`Accel Forward`"));
++    section->Set("IMUAccelerometer/Backward",std::string("`Accel Backward`"));
++    section->Set("IMUGyroscope/Pitch Up",std::string("`Gyro Pitch Up`"));
++    section->Set("IMUGyroscope/Pitch Down",std::string("`Gyro Pitch Down`"));
++    section->Set("IMUGyroscope/Roll Left",std::string("`Gyro Roll Left`"));
++    section->Set("IMUGyroscope/Roll Right",std::string("`Gyro Roll Right`"));
++    section->Set("IMUGyroscope/Yaw Left",std::string("`Gyro Yaw Left`"));
++    section->Set("IMUGyroscope/Yaw Right",std::string("`Gyro Yaw Right`"));
++    section->Set("Rumble/Motor",std::string("`Motor`"));
++    section->Set("IMUIR/Preserve Angle",std::string("True"));
++    controller->LoadConfig(section);controller->UpdateReferences(g_controller_interface);config->SaveConfig();
++  }
++  namespace DSU=ciface::DualShockUDPClient;
++  std::stringstream entries(Config::Get(DSU::Settings::SERVERS));std::string entry,updated;
++  const std::string endpoint=std::string(":")+address.UTF8String+":"+std::to_string(port);
++  // An older entry for the same phone (for example a manual DSU server) would make it send everything twice.
++  while(std::getline(entries,entry,';'))if(!entry.empty() && !entry.starts_with(name+":") && !entry.ends_with(endpoint))updated+=entry+";";
++  updated+=name+":"+address.UTF8String+":"+std::to_string(port)+";";
++  Config::SetBaseOrCurrent(DSU::Settings::SERVERS,updated);
++  Config::SetBaseOrCurrent(DSU::Settings::SERVERS_ENABLED,true);
++  Config::SetBaseOrCurrent(Config::GetInfoForWiimoteSource(slot),WiimoteSource::Emulated);
++  Config::Save();DSU::MotionRemote::selected.store(slot);DSU::MotionRemote::enabled.store(overlay);
++  return nil;
++}
++
++@interface MRPeer : NSObject <CBPeripheralDelegate>
++@property(nonatomic,strong) NSString* key;
++@property(nonatomic,strong) NSString* name;
++@property(nonatomic,strong) NSString* address;
++@property int port;
++@property int player;
++// Slot the phone itself serves (its player setting minus one); several phones may share it.
++@property int phoneSlot;
++@property(nonatomic,strong) CBPeripheral* peripheral;
++@property(nonatomic,strong) CBCharacteristic* rx;
++@property(nonatomic,strong) CBCharacteristic* tx;
++@property int fd;
++@property(nonatomic,strong) dispatch_source_t source;
++@property(nonatomic,strong) NSMutableDictionary<NSString*,NSNumber*>* routes;
++@property(nonatomic,strong) NSMutableDictionary<NSNumber*,NSData*>* endpoints;
++@property(nonatomic,strong) NSMutableArray<NSDictionary*>* writes;
++@property(nonatomic,strong) NSMutableDictionary<NSString*,NSNumber*>* routeTimes;
++@property UInt8 sequence;
++@property BOOL connected;
++// Reserves the player while a Bluetooth connection is still being set up.
++@property BOOL wanted;
++- (NSString*)kind;
++- (BOOL)openBridge;
++@end
++@interface MRManager : NSObject <CBCentralManagerDelegate,NSNetServiceBrowserDelegate,NSNetServiceDelegate>
++@property(nonatomic,strong) CBCentralManager* central;
++@property(nonatomic,strong) NSNetServiceBrowser* browser;
++@property(nonatomic,strong) NSMutableArray<NSNetService*>* services;
++@property(nonatomic,strong) NSMutableArray<MRPeer*>* peers;
++@property(nonatomic,strong) NSString* status;
++@property(nonatomic,strong) NSString* recommendation;
++@property(nonatomic,strong) NSMutableDictionary<NSString*,NSDictionary*>* scores;
++@property BOOL overlay;
++@property int manualPlayer;
++@property BOOL testing;
++#if !TARGET_OS_IPHONE
++@property(nonatomic,strong) NSWindow* window;
++@property(nonatomic,strong) NSArray<NSPopUpButton*>* rows;
++@property(nonatomic,strong) NSPopUpButton* playerPicker;
++@property(nonatomic,strong) NSTextField* statusLabel;
++@property(nonatomic,strong) NSTextField* addressField;
++@property(nonatomic,strong) NSButton* overlayButton;
++#endif
+++ (instancetype)shared;
++- (void)scan;
++- (void)connect:(MRPeer*)peer;
++- (void)connect:(MRPeer*)peer player:(int)player;
++- (BOOL)inUse:(MRPeer*)peer;
++- (void)test:(MRPeer*)peer;
++- (void)disconnect:(MRPeer*)peer;
++@end
++
++@implementation MRPeer { MRWire::Decoder _decoder; }
++- (instancetype)init { if((self=[super init])) { _fd=-1;_routeTimes=[NSMutableDictionary dictionary];_routes=[NSMutableDictionary dictionary];_endpoints=[NSMutableDictionary dictionary];_writes=[NSMutableArray array]; }return self; }
++- (void)close {
++  self.connected=NO;_decoder={};
++  if(self.source) { dispatch_source_cancel(self.source);self.source=nil; }
++  else if(self.fd>=0)close(self.fd);
++  self.fd=-1;[self.routes removeAllObjects];[self.endpoints removeAllObjects];[self.writes removeAllObjects];self.rx=nil;self.tx=nil;
++}
++- (NSString*)kind {return self.peripheral?@"Bluetooth":@"Wi-Fi";}
++- (void)dealloc { [self close]; }
++- (void)sendFrames:(NSData*)data route:(UInt8)route {
++  if(!self.rx || data.length>1024 || self.writes.count>128)return;
++  const auto* bytes=(const std::uint8_t*)data.bytes;
++  auto frames=MRWire::Frames(MRWire::Bytes(bytes,bytes+data.length),route,++self.sequence,[self.peripheral maximumWriteValueLengthForType:CBCharacteristicWriteWithoutResponse]);
++  for(const auto& frame:frames)[self.writes addObject:@{@"data":[NSData dataWithBytes:frame.data() length:frame.size()],@"time":@(MRNow())}];
++  [self drain];
++}
++- (void)drain {
++  while(self.writes.count && self.peripheral.canSendWriteWithoutResponse && self.rx) {
++    NSDictionary* item=self.writes.firstObject;[self.writes removeObjectAtIndex:0];if(MRNow()-[item[@"time"] doubleValue]>0.2)continue;NSData* data=item[@"data"];
++    [self.peripheral writeValue:data forCharacteristic:self.rx type:CBCharacteristicWriteWithoutResponse];
++  }
++}
++- (void)peripheralIsReadyToSendWriteWithoutResponse:(CBPeripheral*)peripheral { [self drain]; }
++- (void)peripheral:(CBPeripheral*)p didDiscoverServices:(NSError*)error {
++  if(error) { MRManager.shared.status=error.localizedDescription;return; }
++  for(CBService* service in p.services)if([service.UUID isEqual:[CBUUID UUIDWithString:MRService]])[p discoverCharacteristics:@[[CBUUID UUIDWithString:MRRx],[CBUUID UUIDWithString:MRTx]] forService:service];
++}
++- (void)peripheral:(CBPeripheral*)p didDiscoverCharacteristicsForService:(CBService*)service error:(NSError*)error {
++  if(error) { MRManager.shared.status=error.localizedDescription;return; }
++  for(CBCharacteristic* c in service.characteristics) {
++    if([c.UUID isEqual:[CBUUID UUIDWithString:MRRx]])self.rx=c;
++    if([c.UUID isEqual:[CBUUID UUIDWithString:MRTx]]) {self.tx=c;[p setNotifyValue:YES forCharacteristic:c];}
++  }
++}
++- (void)peripheral:(CBPeripheral*)p didUpdateNotificationStateForCharacteristic:(CBCharacteristic*)c error:(NSError*)error {
++  if(error || !c.isNotifying || !self.rx) { MRManager.shared.status=error.localizedDescription ?: @"Bluetooth subscription failed.";return; }
++  if(![self openBridge]) {MRManager.shared.status=@"Bluetooth bridge port busy. Close other Dolphin copies.";return;}
++  NSString* failure=MRApply(self.address,self.port,self.player,self.phoneSlot,MRManager.shared.overlay);
++  for(MRPeer* other in MRManager.shared.peers)if(other!=self && other.player==self.player)other.connected=NO;
++  self.connected=failure==nil;MRManager.shared.status=failure ?: [NSString stringWithFormat:@"Bluetooth connected · Player %d. Test the link or start your game.",self.player];
++}
++- (BOOL)openBridge {
++  if(self.fd>=0)return YES;
++  const int port=26800+self.player-1;
++  int fd=socket(AF_INET,SOCK_DGRAM,0);sockaddr_in a{};a.sin_family=AF_INET;a.sin_addr.s_addr=htonl(INADDR_LOOPBACK);a.sin_port=htons(port);
++  if(fd<0 || bind(fd,(sockaddr*)&a,sizeof(a))!=0) {if(fd>=0)close(fd);return NO;}
++  self.fd=fd;self.address=@"127.0.0.1";self.port=port;
++  self.source=dispatch_source_create(DISPATCH_SOURCE_TYPE_READ,fd,0,dispatch_get_main_queue());
++  __weak MRPeer* weak=self;
++  dispatch_source_set_event_handler(self.source,^{
++    MRPeer* peer=weak;if(!peer)return;
++    UInt8 buffer[1024];sockaddr_in from{};socklen_t n=sizeof(from);
++    ssize_t len=recvfrom(fd,buffer,sizeof(buffer),MSG_DONTWAIT,(sockaddr*)&from,&n);if(len<=0)return;
++    NSString* key=[NSString stringWithFormat:@"%u",ntohs(from.sin_port)];NSNumber* route=peer.routes[key];
++    if(!route) {
++      for(int i=0;i<16;i++)if(!peer.endpoints[@(i)]) {route=@(i);break;}
++      if(!route)for(NSString* old in [peer.routeTimes.allKeys copy])if(MRNow()-[peer.routeTimes[old] doubleValue]>10) {route=peer.routes[old];[peer.routes removeObjectForKey:old];[peer.routeTimes removeObjectForKey:old];break;}
++      if(!route)return;peer.routes[key]=route;peer.endpoints[route]=[NSData dataWithBytes:&from length:sizeof(from)];
++    }
++    peer.routeTimes[key]=@(MRNow());
++    [peer sendFrames:[NSData dataWithBytes:buffer length:len] route:route.unsignedCharValue];
++  });
++  dispatch_source_set_cancel_handler(self.source,^{close(fd);});dispatch_resume(self.source);
++  return YES;
++}
++- (void)peripheral:(CBPeripheral*)p didUpdateValueForCharacteristic:(CBCharacteristic*)c error:(NSError*)error {
++  if(error || ![c.UUID isEqual:[CBUUID UUIDWithString:MRTx]] || c.value.length<=4)return;
++  const auto* b=(const std::uint8_t*)c.value.bytes;
++  const auto value=_decoder.Accept(MRWire::Bytes(b,b+c.value.length),MRNow());
++  if(!value)return;
++  NSData* endpoint=self.endpoints[@(value->first)];
++  if(endpoint && self.fd>=0)sendto(self.fd,value->second.data(),value->second.size(),0,(sockaddr*)endpoint.bytes,(socklen_t)endpoint.length);
++}
++@end
++
++@implementation MRManager
+++ (instancetype)shared {static MRManager* s;static dispatch_once_t once;dispatch_once(&once,^{s=[MRManager new];s.peers=[NSMutableArray array];s.services=[NSMutableArray array];s.scores=[NSMutableDictionary dictionary];s.manualPlayer=1;s.status=@"Start MotionRemote on the iPhone, then scan and select Wi-Fi or Bluetooth.";s.recommendation=@"Test both paths to compare. Internet speed is not the controller-link speed.";});return s;}
++- (void)scan {
++  if(!self.central)self.central=[[CBCentralManager alloc] initWithDelegate:self queue:dispatch_get_main_queue()];
++  if(self.central.state==CBManagerStatePoweredOn)[self.central scanForPeripheralsWithServices:@[[CBUUID UUIDWithString:MRService]] options:nil];
++  if(!self.browser) {self.browser=[NSNetServiceBrowser new];self.browser.delegate=self;[self.browser searchForServicesOfType:@"_motionremote._udp." inDomain:@"local."];}
++  self.status=@"Scanning Wi-Fi and Bluetooth… Keep MotionRemote open and press Connect on the phone.";
++}
++- (void)centralManagerDidUpdateState:(CBCentralManager*)central {
++  if(central.state==CBManagerStatePoweredOn)[central scanForPeripheralsWithServices:@[[CBUUID UUIDWithString:MRService]] options:nil];
++  else self.status=central.state==CBManagerStateUnauthorized?@"Bluetooth permission denied. Allow Dolphin in system privacy settings.":@"Bluetooth unavailable or switched off. Wi-Fi discovery remains available.";
++}
++- (void)centralManager:(CBCentralManager*)central didDiscoverPeripheral:(CBPeripheral*)p advertisementData:(NSDictionary*)advertisement RSSI:(NSNumber*)RSSI {
++  NSString* key=p.identifier.UUIDString;MRPeer* peer=nil;for(MRPeer* old in self.peers)if([old.key isEqual:key])peer=old;
++  // The phone name can arrive in a later scan response; a connected entry keeps its player.
++  NSString* advertised=advertisement[CBAdvertisementDataLocalNameKey];
++  if(peer && ([self inUse:peer] || !advertised))return;
++  if(!peer) {peer=[MRPeer new];peer.key=key;peer.peripheral=p;[self.peers addObject:peer];}
++  peer.name=advertised ?: p.name ?: @"MotionRemote";
++  peer.player=peer.name.length>1 && [peer.name characterAtIndex:0]=='P' ? [[peer.name substringWithRange:NSMakeRange(1,1)] intValue] : 1;
++  peer.player=std::clamp(peer.player,1,4);peer.phoneSlot=peer.player-1;
++}
++- (void)netServiceBrowser:(NSNetServiceBrowser*)browser didFindService:(NSNetService*)service moreComing:(BOOL)more {
++  service.delegate=self;[self.services addObject:service];[service resolveWithTimeout:5];
++}
++- (void)netServiceBrowser:(NSNetServiceBrowser*)browser didNotSearch:(NSDictionary*)error {
++  self.status=@"Wi-Fi discovery failed. Allow Local Network access or use Connect by IP. Bluetooth can still be used.";
++}
++- (void)netServiceBrowser:(NSNetServiceBrowser*)browser didRemoveService:(NSNetService*)service moreComing:(BOOL)more {
++  [self.services removeObject:service];NSString* key=[@"wifi:" stringByAppendingString:service.name];
++  NSIndexSet* gone=[self.peers indexesOfObjectsPassingTest:^BOOL(MRPeer* peer,NSUInteger,BOOL*) {return !peer.connected && [peer.key isEqual:key];}];[self.peers removeObjectsAtIndexes:gone];
++}
++- (void)netServiceDidResolveAddress:(NSNetService*)service {
++  NSString* key=[@"wifi:" stringByAppendingString:service.name];MRPeer* existing=nil;for(MRPeer* p in self.peers)if([p.key isEqual:key]) {existing=p;break;}
++  for(NSData* d in service.addresses) {
++    const sockaddr* sa=(const sockaddr*)d.bytes;if(sa->sa_family!=AF_INET)continue;
++    char ip[INET_ADDRSTRLEN];inet_ntop(AF_INET,&((const sockaddr_in*)sa)->sin_addr,ip,sizeof(ip));
++    NSDictionary* txt=[NSNetService dictionaryFromTXTRecordData:service.TXTRecordData ?: NSData.data];
++    if(existing && [self inUse:existing])break;
++    MRPeer* p=existing ?: [MRPeer new];p.key=key;p.name=service.name;p.address=[NSString stringWithUTF8String:ip];p.port=(int)service.port;
++    p.player=std::clamp([[[NSString alloc] initWithData:txt[@"player"] encoding:NSUTF8StringEncoding] intValue],1,4);p.phoneSlot=p.player-1;if(!existing)[self.peers addObject:p];break;
++  }
++}
++- (void)centralManager:(CBCentralManager*)central didConnectPeripheral:(CBPeripheral*)p { p.delegate=[self peerFor:p];[p discoverServices:@[[CBUUID UUIDWithString:MRService]]]; }
++- (MRPeer*)peerFor:(CBPeripheral*)p {MRPeer* found=nil;for(MRPeer* peer in self.peers)if(peer.peripheral==p && (!found || peer.wanted))found=peer;return found;}
++- (void)centralManager:(CBCentralManager*)central didFailToConnectPeripheral:(CBPeripheral*)p error:(NSError*)error {self.status=error.localizedDescription ?: @"Bluetooth connection failed.";}
++- (void)centralManager:(CBCentralManager*)central didDisconnectPeripheral:(CBPeripheral*)p error:(NSError*)error {
++  MRPeer* peer=[self peerFor:p];
++  BOOL active=peer.connected;peer.wanted=NO;[peer close];if(active)self.status=@"Bluetooth disconnected. Select the phone and reconnect.";}
++- (BOOL)inUse:(MRPeer*)peer {return peer.connected || peer.wanted;}
++- (int)freePlayerFor:(MRPeer*)peer {
++  // Phones often all keep the default player 1; each connected phone gets its own Wii Remote.
++  auto taken=[&](int player) {
++    for(MRPeer* other in self.peers)if(other!=peer && [self inUse:other] && ![other.name isEqual:peer.name] && other.player==player)return true;
++    return false;
++  };
++  if(!taken(peer.phoneSlot+1))return peer.phoneSlot+1;
++  for(int player=1;player<=4;++player)if(!taken(player))return player;
++  return 0;
++}
++- (void)connect:(MRPeer*)peer {[self connect:peer player:0];}
++// player 0 picks a free player; 1–4 takes that player from whichever phone holds it.
++- (void)connect:(MRPeer*)peer player:(int)requested {
++  if([self inUse:peer] && (!requested || peer.player==requested)) {self.status=[NSString stringWithFormat:@"Already connected · Player %d.",peer.player];return;}
++  // Only one entry (Wi-Fi or Bluetooth) of the same phone stays active.
++  for(MRPeer* other in [self.peers copy])if([self inUse:other] && (other==peer || [other.name isEqual:peer.name] || (requested && other.player==requested)))[self disconnect:other];
++  const int player=requested ?: [self freePlayerFor:peer];
++  if(!player) {self.status=@"All four players are in use. Disconnect a phone first.";return;}
++  peer.player=player;
++  if(peer.peripheral) {
++    // Reserves the player until the subscription completes or fails.
++    peer.wanted=YES;
++    self.status=[NSString stringWithFormat:@"Connecting Bluetooth as Player %d… Confirm the system pairing prompt if shown.",player];[self.central connectPeripheral:peer.peripheral options:nil];
++  } else {
++    NSString* error=MRApply(peer.address,peer.port,peer.player,peer.phoneSlot,self.overlay);peer.connected=error==nil;self.status=error ?: [NSString stringWithFormat:@"Wi-Fi configured · Player %d. Start the game or test this link.",peer.player];
++  }
++}
++- (void)disconnect:(MRPeer*)peer {
++  peer.wanted=NO;peer.connected=NO;
++  if(peer.peripheral)[self.central cancelPeripheralConnection:peer.peripheral];[peer close];
++  namespace DSU=ciface::DualShockUDPClient;
++  const std::string name=peer.player==1?"MotionRemote":"MotionRemote P"+std::to_string(peer.player);
++  const std::string endpoint=name+":"+std::string(peer.address.UTF8String ?: "")+":"+std::to_string(peer.port);
++  std::stringstream servers(Config::Get(DSU::Settings::SERVERS));std::string entry,updated;bool removed=false;
++  while(std::getline(servers,entry,';'))if(entry==endpoint)removed=true;else if(!entry.empty())updated+=entry+";";
++  if(removed) {Config::SetBaseOrCurrent(DSU::Settings::SERVERS,updated);Config::SetBaseOrCurrent(Config::GetInfoForWiimoteSource(peer.player-1),WiimoteSource::None);Config::Save();}
++  peer.player=peer.phoneSlot+1;
++  self.status=@"Disconnected. Controller input stops; reconnect before continuing.";
++}
++- (void)test:(MRPeer*)peer {
++  if(self.testing)return;
++  if(!peer.address || (peer.peripheral && !peer.connected)) {self.status=@"Connect this Bluetooth phone before testing it.";return;}
++  self.testing=YES;self.status=@"Measuring controller round-trip latency, jitter and packet loss…";
++  NSString* address=peer.address;int port=peer.port;NSString* key=peer.kind;NSString* identity=peer.name;NSString* scoreKey=[identity stringByAppendingFormat:@"/%@",key];
++  dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{
++    int fd=socket(AF_INET,SOCK_DGRAM,0);sockaddr_in target{};target.sin_family=AF_INET;target.sin_port=htons(port);inet_pton(AF_INET,address.UTF8String,&target.sin_addr);
++    int count=40;std::vector<double> samples;UInt8 nonce[32];arc4random_buf(nonce,sizeof(nonce));memcpy(nonce,"MRPING01",8);
++    if(fd>=0)for(int i=0;i<count;i++) {
++      nonce[8]=(UInt8)i;double before=MRNow();sendto(fd,nonce,sizeof(nonce),0,(sockaddr*)&target,sizeof(target));
++      bool accepted=false;
++      while(MRNow()-before<0.15) {
++        pollfd f{fd,POLLIN,0};if(poll(&f,1,10)<=0)continue;UInt8 reply[64];ssize_t n=recv(fd,reply,sizeof(reply),MSG_DONTWAIT);
++        if(n==32 && memcmp(reply,nonce,32)==0) {samples.push_back((MRNow()-before)*1000);accepted=true;break;}
++      }
++      if(accepted)usleep(50000);
++    }
++    if(fd>=0)close(fd);
++    auto quality=MRLink::Measure(samples,count);int received=quality.received;double loss=quality.loss,avg=quality.average,j=quality.jitter;
++    dispatch_async(dispatch_get_main_queue(),^{
++      self.testing=NO;
++      self.status=[NSString stringWithFormat:@"%@: %.1f ms round-trip · %.1f ms jitter · %.0f%% loss (%d/%d).",key,avg,j,loss,received,count];
++      if(received<20) {self.recommendation=@"This path is not reliable enough. Check permissions and keep both apps open; test the other transport.";[self.scores removeObjectForKey:scoreKey];return;}
++      self.scores[scoreKey]=@{@"score":@(quality.Score()),@"poor":@(quality.Poor()),@"time":@(MRNow())};
++      NSDictionary* wifi=self.scores[[identity stringByAppendingString:@"/Wi-Fi"]];
++      NSDictionary* bluetooth=self.scores[[identity stringByAppendingString:@"/Bluetooth"]];
++      if(wifi && bluetooth && MRNow()-[wifi[@"time"] doubleValue]<300 && MRNow()-[bluetooth[@"time"] doubleValue]<300) {
++        self.recommendation=[wifi[@"score"] doubleValue]<=[bluetooth[@"score"] doubleValue]?@"Measured recommendation: Wi-Fi has the better controller link.":@"Measured recommendation: Bluetooth has the better controller link.";
++        if([wifi[@"poor"] boolValue] && [bluetooth[@"poor"] boolValue])self.recommendation=[self.recommendation stringByAppendingString:@" Both paths still show high latency or loss; neither is a good link yet."];
++      } else self.recommendation=[NSString stringWithFormat:@"%@ measured. Test the other connection on this same phone within five minutes to compare. Internet Mbps is not used for the recommendation.",key];
++    });
++  });
++}
++@end
++#if TARGET_OS_IPHONE
++@interface MRConnectionsView : UITableViewController
++@property(nonatomic,strong) NSArray<MRPeer*>* visiblePeers;
++@property(nonatomic,strong) NSTimer* timer;
++@end
++@implementation MRConnectionsView
++- (void)viewDidLoad {
++  [super viewDidLoad];self.title=@"MotionRemote Connections";
++  self.navigationItem.rightBarButtonItem=[[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemDone target:self action:@selector(done)];
++  [MRManager.shared scan];self.visiblePeers=[MRManager.shared.peers copy];__weak MRConnectionsView* weak=self;
++  self.timer=[NSTimer scheduledTimerWithTimeInterval:0.5 repeats:YES block:^(NSTimer*){weak.visiblePeers=[MRManager.shared.peers copy];[weak.tableView reloadData];}];
++}
++- (void)viewDidDisappear:(BOOL)animated {[super viewDidDisappear:animated];[self.timer invalidate];self.timer=nil;}
++- (void)done {[self dismissViewControllerAnimated:YES completion:nil];}
++- (NSInteger)numberOfSectionsInTableView:(UITableView*)tableView {return 3;}
++- (NSInteger)tableView:(UITableView*)tableView numberOfRowsInSection:(NSInteger)section {return section==0?3:section==1?self.visiblePeers.count:3;}
++- (NSString*)tableView:(UITableView*)tableView titleForHeaderInSection:(NSInteger)section {return @[@"Connection & quality",@"Nearby iPhones — tap to connect or test",@"Settings"][section];}
++- (UITableViewCell*)tableView:(UITableView*)tableView cellForRowAtIndexPath:(NSIndexPath*)path {
++  UITableViewCell* cell=[[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:nil];cell.textLabel.numberOfLines=0;cell.detailTextLabel.numberOfLines=0;
++  MRManager* manager=MRManager.shared;
++  if(path.section==0) {cell.textLabel.text=path.row==0?manager.status:path.row==1?manager.recommendation:@"Scan again";cell.selectionStyle=path.row==2?UITableViewCellSelectionStyleDefault:UITableViewCellSelectionStyleNone;}
++  else if(path.section==1) {MRPeer* peer=self.visiblePeers[path.row];cell.textLabel.text=[NSString stringWithFormat:@"%@ · %@",peer.name,peer.kind];cell.detailTextLabel.text=peer.connected?[NSString stringWithFormat:@"Connected as Player %d — tap for link test / disconnect",peer.player]:peer.wanted?[NSString stringWithFormat:@"Connecting as Player %d…",peer.player]:[NSString stringWithFormat:@"Player %d · tap for connection options",peer.player];cell.accessoryType=peer.connected?UITableViewCellAccessoryCheckmark:UITableViewCellAccessoryDisclosureIndicator;}
++  else if(path.row==0)cell.textLabel.text=[NSString stringWithFormat:@"Manual IP phone set to player: %d — tap to change",manager.manualPlayer];
++  else if(path.row==1) {cell.textLabel.text=@"Show haptics & 3D overlay";UISwitch* toggle=[UISwitch new];toggle.on=manager.overlay;[toggle addTarget:self action:@selector(overlay:) forControlEvents:UIControlEventValueChanged];cell.accessoryView=toggle;}
++  else cell.textLabel.text=@"Connect by IP address…";
++  return cell;
++}
++- (void)overlay:(UISwitch*)sender {MRManager.shared.overlay=sender.on;ciface::DualShockUDPClient::MotionRemote::enabled.store(sender.on);}
++- (void)tableView:(UITableView*)tableView didSelectRowAtIndexPath:(NSIndexPath*)path {
++  [tableView deselectRowAtIndexPath:path animated:YES];MRManager* manager=MRManager.shared;
++  if(path.section==0) {if(path.row==2)[manager scan];return;}
++  if(path.section==2 && path.row==0) {manager.manualPlayer=manager.manualPlayer%4+1;return;}
++  if(path.section==2 && path.row==2) {
++    UIAlertController* alert=[UIAlertController alertControllerWithTitle:@"Connect over Wi-Fi" message:@"Enter the iPhone's IPv4 address. The selected manual player must match the iPhone." preferredStyle:UIAlertControllerStyleAlert];
++    [alert addTextFieldWithConfigurationHandler:^(UITextField* f){f.placeholder=@"192.168.1.20";f.keyboardType=UIKeyboardTypeDecimalPad;}];
++    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
++    [alert addAction:[UIAlertAction actionWithTitle:@"Connect" style:UIAlertActionStyleDefault handler:^(UIAlertAction*){MRPeer* p=[MRPeer new];p.address=alert.textFields.firstObject.text;p.port=26760;p.player=manager.manualPlayer;p.phoneSlot=p.player-1;p.name=[@"Manual " stringByAppendingString:p.address];p.key=[@"manual:" stringByAppendingString:p.address];[manager.peers addObject:p];[manager connect:p];}]];[self presentViewController:alert animated:YES completion:nil];return;
++  }
++  if(path.section!=1)return;
++  MRPeer* peer=self.visiblePeers[path.row];UIAlertController* alert=[UIAlertController alertControllerWithTitle:peer.name message:peer.peripheral?@"Bluetooth does not need a Wi-Fi connection.":@"Automatically configures this phone's Wii Remote profile." preferredStyle:UIAlertControllerStyleAlert];
++  [alert addAction:[UIAlertAction actionWithTitle:@"Connect" style:UIAlertActionStyleDefault handler:^(UIAlertAction*){[manager connect:peer];}]];
++  [alert addAction:[UIAlertAction actionWithTitle:@"Test controller link" style:UIAlertActionStyleDefault handler:^(UIAlertAction*){[manager test:peer];}]];
++  [alert addAction:[UIAlertAction actionWithTitle:@"Disconnect" style:UIAlertActionStyleDestructive handler:^(UIAlertAction*){[manager disconnect:peer];}]];
++  [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];[self presentViewController:alert animated:YES completion:nil];
++}
++@end
++void MotionRemoteShowConnections(void* presenter) {
++  UIViewController* parent=(__bridge UIViewController*)presenter;
++  if(parent)[parent presentViewController:[[UINavigationController alloc] initWithRootViewController:[[MRConnectionsView alloc] initWithStyle:UITableViewStyleInsetGrouped]] animated:YES completion:nil];
++}
++#else
++@interface MRManager (UI)
++- (void)showWindow;
++@end
++@implementation MRManager (UI)
++- (void)showWindow {
++  [self scan];
++  if(self.window) {[self.window makeKeyAndOrderFront:nil];return;}
++  self.window=[[NSWindow alloc] initWithContentRect:NSMakeRect(0,0,640,560) styleMask:NSWindowStyleMaskTitled|NSWindowStyleMaskClosable backing:NSBackingStoreBuffered defer:NO];
++  self.window.releasedWhenClosed=NO;self.window.title=@"MotionRemote Connections";[self.window center];
++  NSView* content=self.window.contentView;
++  NSMutableArray* rows=[NSMutableArray array];
++  for(int player=1;player<=4;player++) {
++    const CGFloat y=500-player*46;
++    NSTextField* label=[NSTextField labelWithString:[NSString stringWithFormat:@"Player %d",player]];label.frame=NSMakeRect(24,y+6,70,20);[content addSubview:label];
++    NSPopUpButton* popup=[[NSPopUpButton alloc] initWithFrame:NSMakeRect(96,y,290,32) pullsDown:NO];popup.tag=player;[content addSubview:popup];[rows addObject:popup];
++    NSArray* titles=@[@"Connect",@"Test",@"Disconnect"];NSArray* actions=@[@"connectRow:",@"testRow:",@"disconnectRow:"];
++    for(int i=0;i<3;i++) {NSButton* b=[NSButton buttonWithTitle:titles[i] target:self action:NSSelectorFromString(actions[i])];b.tag=player;b.frame=NSMakeRect(392+i*82,y,80,32);[content addSubview:b];}
++  }
++  self.rows=rows;
++  NSButton* rescan=[NSButton buttonWithTitle:@"Scan again" target:self action:@selector(scan)];rescan.frame=NSMakeRect(24,272,120,32);[content addSubview:rescan];
++  self.statusLabel=[NSTextField wrappingLabelWithString:self.status];self.statusLabel.frame=NSMakeRect(24,150,592,115);[content addSubview:self.statusLabel];
++  self.overlayButton=[NSButton checkboxWithTitle:@"Show haptics and 3D path overlay" target:self action:@selector(changeOverlay)];self.overlayButton.frame=NSMakeRect(24,116,550,28);self.overlayButton.state=self.overlay;[content addSubview:self.overlayButton];
++  self.addressField=[[NSTextField alloc] initWithFrame:NSMakeRect(24,72,245,28)];self.addressField.placeholderString=@"Manual iPhone IPv4 address";[content addSubview:self.addressField];
++  self.playerPicker=[[NSPopUpButton alloc] initWithFrame:NSMakeRect(280,70,170,32) pullsDown:NO];[self.playerPicker addItemsWithTitles:@[@"Phone set to P1",@"Phone set to P2",@"Phone set to P3",@"Phone set to P4"]];[content addSubview:self.playerPicker];
++  NSButton* manual=[NSButton buttonWithTitle:@"Connect IP" target:self action:@selector(connectManual)];manual.frame=NSMakeRect(460,70,150,32);[content addSubview:manual];
++  NSTextField* note=[NSTextField wrappingLabelWithString:@"Start the phone app first, then choose a phone for each player. The phones do not need different player settings. Wi-Fi gives the lowest latency (switch AirDrop and Handoff off while playing); Bluetooth may show a system pairing prompt."];note.frame=NSMakeRect(24,12,592,50);[content addSubview:note];
++  __weak MRManager* weak=self;[NSTimer scheduledTimerWithTimeInterval:0.5 repeats:YES block:^(NSTimer*){[weak refreshWindow];}];
++  [self refreshWindow];[self.window makeKeyAndOrderFront:nil];
++}
++- (void)refreshWindow {
++  NSMutableString* text=[NSMutableString stringWithFormat:@"%@\n\n%@",self.status,self.recommendation];
++  self.statusLabel.stringValue=text;
++  // The timer does not fire while a menu is open, so rebuilding never disturbs a choice in progress.
++  for(NSPopUpButton* popup in self.rows) {
++    const int player=(int)popup.tag;
++    MRPeer* active=nil;for(MRPeer* p in self.peers)if([self inUse:p] && p.player==player)active=p;
++    MRPeer* chosen=active ?: popup.selectedItem.representedObject;
++    [popup removeAllItems];[popup.menu addItem:[[NSMenuItem alloc] initWithTitle:@"Choose a phone…" action:nil keyEquivalent:@""]];
++    for(MRPeer* p in self.peers) {
++      NSString* state=[self inUse:p]?[NSString stringWithFormat:@" — %@ as Player %d",p.connected?@"connected":@"connecting",p.player]:@"";
++      NSMenuItem* item=[[NSMenuItem alloc] initWithTitle:[NSString stringWithFormat:@"%@ · %@%@",p.name,p.kind,state] action:nil keyEquivalent:@""];
++      item.representedObject=p;[popup.menu addItem:item];if(p==chosen)[popup selectItem:item];
++    }
++  }
++}
++- (MRPeer*)peerInRow:(NSButton*)sender {
++  for(NSPopUpButton* popup in self.rows)if(popup.tag==sender.tag)return popup.selectedItem.representedObject;
++  return nil;
++}
++- (void)connectRow:(NSButton*)sender {MRPeer* p=[self peerInRow:sender];if(p)[self connect:p player:(int)sender.tag];else self.status=@"Choose a phone for this player first. If none is listed, start the controller on the phone and scan again.";[self refreshWindow];}
++- (void)testRow:(NSButton*)sender {MRPeer* p=[self peerInRow:sender];if(p)[self test:p];}
++- (void)disconnectRow:(NSButton*)sender {MRPeer* p=[self peerInRow:sender];if(p && [self inUse:p])[self disconnect:p];[self refreshWindow];}
++- (void)changeOverlay {self.overlay=self.overlayButton.state==NSControlStateValueOn;ciface::DualShockUDPClient::MotionRemote::enabled.store(self.overlay);}
++- (void)connectManual {MRPeer* p=[MRPeer new];p.address=self.addressField.stringValue;p.name=[@"Manual " stringByAppendingString:p.address];p.key=[@"manual:" stringByAppendingString:p.address];p.port=26760;p.player=(int)self.playerPicker.indexOfSelectedItem+1;p.phoneSlot=p.player-1;[self.peers addObject:p];[self connect:p];}
++@end
++void MotionRemoteShowConnections(void*) { [MRManager.shared showWindow]; }
++#endif
+--- a/Source/Core/InputCommon/ControllerInterface/DualShockUDPClient/MotionRemoteLog.h	1970-01-01 01:00:00
++++ b/Source/Core/InputCommon/ControllerInterface/DualShockUDPClient/MotionRemoteLog.h	2026-11-13 16:27:54
+@@ -0,0 +1,105 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++#pragma once
++#include <cstdint>
++#include <cstdio>
++#include <ctime>
++#include <chrono>
++#include <cmath>
++#include <fstream>
++#include <map>
++#include <mutex>
++#include <string>
++#include <vector>
++
++// MotionRemote diagnostics in Dolphin's Logs folder: one line per event, repeats of a key are counted, not written.
++namespace MRLog
++{
++inline std::mutex mutex;
++inline std::ofstream file;
++inline std::map<std::string,std::pair<double,int>> recent;
++inline void Open(const std::string& path)
++{
++  std::lock_guard lock(mutex);
++  if(file.is_open())return;
++  std::rename(path.c_str(),(path.substr(0,path.size()-4)+"-previous.log").c_str());
++  file.open(path,std::ios::out|std::ios::trunc);
++}
++inline void Write(double now,const std::string& category,const std::string& message,const std::string& key={},double every=1)
++{
++  std::lock_guard lock(mutex);
++  std::string text=message;
++  if(!key.empty())
++  {
++    auto it=recent.find(key);
++    if(it!=recent.end() && now-it->second.first<every) {++it->second.second;return;}
++    if(it!=recent.end() && it->second.second>0)text+=" (+"+std::to_string(it->second.second)+" similar since the last line)";
++    recent[key]={now,0};
++  }
++  if(!file.is_open())return;
++  const auto wall=std::chrono::system_clock::now();
++  const std::time_t seconds=std::chrono::system_clock::to_time_t(wall);
++  const int ms=int(std::chrono::duration_cast<std::chrono::milliseconds>(wall.time_since_epoch()).count()%1000);
++  std::tm local{};localtime_r(&seconds,&local);
++  char stamp[32];std::snprintf(stamp,sizeof(stamp),"%02d:%02d:%02d.%03d",local.tm_hour,local.tm_min,local.tm_sec,ms);
++  file<<stamp<<" ["<<category<<"] "<<text<<"\n";file.flush();
++}
++inline std::string Format(const char* format,auto... values)
++{
++  char buffer[512];std::snprintf(buffer,sizeof(buffer),format,values...);return buffer;
++}
++
++// Per-phone link statistics. The phone stamps every pad packet with its sensor time, which separates
++// Wi-Fi holding packets back from packets lost on the way and from the phone itself pausing.
++struct Link
++{
++  int player=1;
++  double last=-1,summary_at=-1,stalled_since=-1,max_gap=0;
++  std::uint32_t counter=0;
++  std::uint64_t stamp=0;
++  int pads=0,lost=0,held=0,dropped=0,paused=0;
++  std::vector<double> held_times;
++  void Packet(double now,std::uint32_t number,std::uint64_t stamp_us)
++  {
++    if(summary_at<0)summary_at=now;
++    if(last>=0 && now-last<1)
++    {
++      const int missing=int(number-counter)-1;const double gap=(now-last)*1000;
++      lost+=std::max(0,missing);max_gap=std::max(max_gap,gap);
++      if(gap>80)
++      {
++        const double sent=stamp_us>stamp?double(stamp_us-stamp)/1000:0;
++        std::string cause,kind;
++        if(sent<gap/2) {++held;kind="held";held_times.push_back(now);cause=Format("phone sent them %.0f ms apart, so Wi-Fi held them back",sent);}
++        else if(missing>0) {++dropped;kind="dropped";cause="the phone kept sending, the packets were lost on the way";}
++        else {++paused;kind="paused";cause=Format("the phone itself paused sending for %.0f ms",sent);}
++        if(stalled_since<0)Write(now,"LINK",Format("Player %d: packet gap %.0f ms, %d lost: %s",player,gap,std::max(0,missing),cause.c_str()),"gap"+std::to_string(player)+kind);
++      }
++    }
++    if(stalled_since>=0) {Write(now,"LINK",Format("Player %d: controller data resumed after %.0f ms",player,(now-stalled_since)*1000));stalled_since=-1;}
++    last=now;counter=number;stamp=stamp_us;++pads;
++  }
++  void Tick(double now)
++  {
++    if(last>=0 && stalled_since<0 && now-last>0.4)
++    {
++      stalled_since=last;
++      Write(now,"LINK",Format("Player %d: no controller data for 400 ms (inputs are released after 250 ms). Phone app in background or locked, Wi-Fi interference, or AirDrop/Handoff active.",player));
++    }
++    if(summary_at<0 || now-summary_at<10)return;
++    const double seconds=now-summary_at;
++    if(pads>0)
++      Write(now,"SUMMARY",Format("Player %d, 10 s: %.0f pad/s · %d lost (%.1f%%) · longest gap %.0f ms · gaps > 80 ms: %d held by Wi-Fi, %d dropped by Wi-Fi, %d phone paused%s",
++                                  player,pads/seconds,lost,pads+lost>0?100.0*lost/(pads+lost):0.0,max_gap,held,dropped,paused,Rhythm(held_times).c_str()));
++    summary_at=now;pads=lost=held=dropped=paused=0;max_gap=0;held_times.clear();
++  }
++  // Wi-Fi gaps at a steady rhythm point to the radio pausing on purpose (AirDrop/Handoff scanning, power saving).
++  static std::string Rhythm(const std::vector<double>& times)
++  {
++    if(times.size()<4)return {};
++    double mean=0,spread=0;const double n=double(times.size()-1);
++    for(size_t i=1;i<times.size();++i)mean+=(times[i]-times[i-1])/n;
++    for(size_t i=1;i<times.size();++i)spread+=std::pow(times[i]-times[i-1]-mean,2)/n;
++    return std::sqrt(spread)<mean*0.2 ? Format(" (regular, every %.2f s: typical of AirDrop/Handoff radio scanning; switch both off while playing)",mean) : std::string{};
++  }
++};
++}
+--- a/Source/Core/InputCommon/ControllerInterface/DualShockUDPClient/MotionRemoteState.h	1970-01-01 01:00:00
++++ b/Source/Core/InputCommon/ControllerInterface/DualShockUDPClient/MotionRemoteState.h	2026-11-13 23:35:49
+@@ -0,0 +1,104 @@
 +// SPDX-License-Identifier: GPL-2.0-or-later
 +#pragma once
 +#include <array>
@@ -357,7 +1200,22 @@
 +  std::deque<Point> trail;
 +  unsigned segment=0;
 +  bool break_trail=true;
++  // Pose in the phone's calibrated screen frame (packet 0x100007).
++  double screen_at=0;
++  std::uint8_t screen_tracking=0,screen_reason=0;
++  bool screen_calibrated=false;
++  std::array<float,4> screen_orientation{0,0,0,1};
++  int pointer_source=-1; // 0 gyro only, 1 camera relative to recenter, 2 screen-calibrated
 +};
++// Epoch marking the screen-calibrated pointer, so the relative camera mode needs its own recenter again.
++inline constexpr unsigned ScreenEpoch=0xFFFFFFFFu;
++inline const char* ReasonText(std::uint8_t reason)
++{
++  static const char* texts[]={"Tracking normally","Starting camera tracking (move the phone slowly)","Phone moved too fast for the camera",
++    "Camera sees too little detail (dark room, blank wall or ceiling, covered lens)","Recognising the saved room","Camera tracking unavailable",
++    "Camera tracking interrupted","Camera tracking failed","Camera tracking switched off"};
++  return reason<9?texts[reason]:"Unknown tracking state";
++}
 +inline std::mutex mutex;
 +inline std::array<Snapshot,4> states;
 +inline void Reset(int slot) { if(slot<0 || slot>=4)return; std::lock_guard lock(mutex); states[slot]=Snapshot{}; }
@@ -393,11 +1251,30 @@
 +  while(s.trail.size()>512 || (!s.trail.empty() && now-s.trail.front().time>HistorySeconds))s.trail.pop_front();
 +  return true;
 +}
++inline bool Screen(int slot,std::uint8_t tracking,std::uint8_t reason,bool calibrated,std::array<float,4> orientation)
++{
++  if(slot<0 || slot>=4 || tracking>2)return false;
++  float norm=0;
++  for(float v:orientation) {if(!std::isfinite(v))return false;norm+=v*v;}
++  if(tracking==2 && calibrated && norm<0.00001f)return false;
++  std::lock_guard lock(mutex);
++  auto& s=states[slot];
++  s.screen_at=Now();s.screen_tracking=tracking;s.screen_reason=reason;s.screen_calibrated=calibrated;
++  if(norm>=0.00001f) {for(float& v:orientation)v/=std::sqrt(norm);s.screen_orientation=orientation;}
++  return true;
++}
++// Returns the previous source so callers can report changes.
++inline int SetPointerSource(int slot,int source)
++{
++  if(slot<0 || slot>=4)return source;
++  std::lock_guard lock(mutex);
++  const int previous=states[slot].pointer_source;states[slot].pointer_source=source;return previous;
++}
 +inline std::array<Snapshot,4> Read() { std::lock_guard lock(mutex); return states; }
 +}
---- /dev/null
-+++ b/Source/Core/VideoCommon/MotionRemoteOverlay.h
-@@ -0,0 +1,128 @@
+--- a/Source/Core/VideoCommon/MotionRemoteOverlay.h	1970-01-01 01:00:00
++++ b/Source/Core/VideoCommon/MotionRemoteOverlay.h	2026-11-13 16:26:40
+@@ -0,0 +1,133 @@
 +// SPDX-License-Identifier: GPL-2.0-or-later
 +#pragma once
 +#include <algorithm>
@@ -466,8 +1343,13 @@
 +    ImGui::Spacing();
 +    ImGui::Text("SPATIAL TRACE");ImGui::SameLine();ImGui::TextDisabled(" / PLAYER %d",player+1);
 +    const bool live=s.tracking==2 && now-s.pose_at<0.3 && now-s.input_at<1;
++    if(s.screen_calibrated && s.screen_tracking==2 && now-s.screen_at<0.3)ImGui::TextColored(ImVec4(0.35f,1,0.65f,1),"Pointer: screen-calibrated (no recentering needed)");
++    else if(now-s.screen_at<0.3 && s.screen_tracking!=2)ImGui::TextWrapped("%s",MR::ReasonText(s.screen_reason));
 +    if(live)ImGui::TextColored(ImVec4(0.35f,1,0.65f,1),"X %.2f  Y %.2f  Z %.2f m",s.position[0],s.position[1],s.position[2]);
-+    else ImGui::TextWrapped(s.pose_at==0?"Enable Camera position tracking on this iPhone.":"Tracking unavailable / limited. Path paused.");
++    else if(now-s.input_at>=1)ImGui::TextWrapped("Controller data delayed / disconnected. Check the connection.");
++    else if(s.pose_at==0)ImGui::TextWrapped("No camera packets yet. Enable camera tracking on the iPhone.");
++    else if(now-s.pose_at>=0.3)ImGui::TextWrapped("Camera packets delayed / interrupted. Check the link and phone settings.");
++    else ImGui::TextWrapped("The iPhone reports limited camera tracking. Check light and camera visibility.");
 +    const float w=ImGui::GetContentRegionAvail().x;
 +    const float h=std::clamp(viewport->WorkSize.y*0.30f,100.0f*ui,240.0f*ui);
 +    const ImVec2 at=ImGui::GetCursorScreenPos();
@@ -526,8 +1408,8 @@
 +  ImGui::PopStyleColor(3);ImGui::PopStyleVar(3);
 +}
 +}
---- a/Source/Core/VideoCommon/OnScreenDisplay.cpp
-+++ b/Source/Core/VideoCommon/OnScreenDisplay.cpp
+--- a/Source/Core/VideoCommon/OnScreenDisplay.cpp	2026-06-20 01:29:15
++++ b/Source/Core/VideoCommon/OnScreenDisplay.cpp	2026-11-11 10:50:39
 @@ -2,6 +2,7 @@
  // SPDX-License-Identifier: GPL-2.0-or-later
  
@@ -544,8 +1426,8 @@
    const bool draw_messages = Config::Get(Config::MAIN_OSD_MESSAGES);
    const float current_x =
        LEFT_MARGIN * ImGui::GetIO().DisplayFramebufferScale.x + s_obscured_pixels_left;
---- /dev/null
-+++ b/Source/iOS/App/Common/Jit/BuiltInJIT.swift
+--- a/Source/iOS/App/Common/Jit/BuiltInJIT.swift	1970-01-01 01:00:00
++++ b/Source/iOS/App/Common/Jit/BuiltInJIT.swift	2026-11-11 11:59:33
 @@ -0,0 +1,225 @@
 +// SPDX-License-Identifier: GPL-2.0-or-later
 +import Foundation
@@ -772,8 +1654,8 @@
 +    do { try jit.importPairing(from: url) } catch { jit.update(error.localizedDescription) }
 +  }
 +}
---- /dev/null
-+++ b/Source/iOS/App/Common/Jit/JitManager+BuiltIn.mm
+--- a/Source/iOS/App/Common/Jit/JitManager+BuiltIn.mm	1970-01-01 01:00:00
++++ b/Source/iOS/App/Common/Jit/JitManager+BuiltIn.mm	2026-11-11 11:57:44
 @@ -0,0 +1,28 @@
 +// SPDX-License-Identifier: GPL-2.0-or-later
 +#import "JitManager.h"
@@ -803,8 +1685,8 @@
 +  return Common::AllocateWritableRegionAndGetDiff_LuckTXM() != 0;
 +}
 +@end
---- a/Source/iOS/App/Common/Jit/JitManager+Debugger.m
-+++ b/Source/iOS/App/Common/Jit/JitManager+Debugger.m
+--- a/Source/iOS/App/Common/Jit/JitManager+Debugger.m	2026-06-20 01:29:15
++++ b/Source/iOS/App/Common/Jit/JitManager+Debugger.m	2026-11-11 11:59:59
 @@ -15,8 +15,8 @@
  @implementation JitManager (Debugger)
  
@@ -816,8 +1698,8 @@
      return false;
    }
  
---- a/Source/iOS/App/Common/Jit/JitManager.h
-+++ b/Source/iOS/App/Common/Jit/JitManager.h
+--- a/Source/iOS/App/Common/Jit/JitManager.h	2026-06-20 01:29:15
++++ b/Source/iOS/App/Common/Jit/JitManager.h	2026-11-11 11:59:33
 @@ -8,6 +8,8 @@
  @interface JitManager : NSObject
  
@@ -827,19 +1709,21 @@
  @property (nonatomic, nullable) NSString* acquisitionError;
  
  @property (readonly, assign) bool deviceHasTxm;
-@@ -18,4 +20,10 @@
+@@ -16,6 +18,12 @@
  
- @end
+ - (void)recheckIfJitIsAcquired;
  
++@end
++
 +@interface JitManager (BuiltIn)
 +- (bool)hasDebugEntitlement;
 +- (bool)isBuiltInDebuggerAttached;
 +- (bool)prepareBuiltInJitMemory;
-+@end
-+
+ @end
+ 
  NS_ASSUME_NONNULL_END
---- a/Source/iOS/App/Common/Jit/JitManager.m
-+++ b/Source/iOS/App/Common/Jit/JitManager.m
+--- a/Source/iOS/App/Common/Jit/JitManager.m	2026-06-20 01:29:15
++++ b/Source/iOS/App/Common/Jit/JitManager.m	2026-11-11 11:57:44
 @@ -69,9 +69,9 @@
        }
      }
@@ -852,8 +1736,8 @@
        self.acquisitionError = @"A debugger is attached. However, if the debugger is not StikDebug, DolphiniOS will crash when emulation starts.";
      }
    } else if (_jitType == DOLJitTypeUnrestricted) {
---- a/Source/iOS/App/Common/Services/FirebaseService.mm
-+++ b/Source/iOS/App/Common/Services/FirebaseService.mm
+--- a/Source/iOS/App/Common/Services/FirebaseService.mm	2026-06-20 01:29:15
++++ b/Source/iOS/App/Common/Services/FirebaseService.mm	2026-11-11 10:55:06
 @@ -1,86 +1,5 @@
  // Copyright 2023 DolphiniOS Project
  // SPDX-License-Identifier: GPL-2.0-or-later
@@ -872,8 +1756,7 @@
 -
 -@interface FirebaseService () <AnalyticsNoticeViewControllerDelegate>
 -
-+@implementation FirebaseService
- @end
+-@end
 -
 -@implementation FirebaseService {
 -  BOOL _shouldSendInitialEvent;
@@ -941,9 +1824,10 @@
 -  }
 -}
 -
--@end
---- a/Source/iOS/App/Common/Services/JitAcquisitionService.swift
-+++ b/Source/iOS/App/Common/Services/JitAcquisitionService.swift
++@implementation FirebaseService
+ @end
+--- a/Source/iOS/App/Common/Services/JitAcquisitionService.swift	2026-06-20 01:29:15
++++ b/Source/iOS/App/Common/Services/JitAcquisitionService.swift	2026-11-11 11:58:36
 @@ -13,7 +13,7 @@
        manager.acquireJitByPTrace()
        
@@ -953,8 +1837,8 @@
  #endif
      }
      
---- a/Source/iOS/App/Common/UI/BootNotice/Analytics/AnalyticsNoticeViewController.mm
-+++ b/Source/iOS/App/Common/UI/BootNotice/Analytics/AnalyticsNoticeViewController.mm
+--- a/Source/iOS/App/Common/UI/BootNotice/Analytics/AnalyticsNoticeViewController.mm	2026-06-20 01:29:15
++++ b/Source/iOS/App/Common/UI/BootNotice/Analytics/AnalyticsNoticeViewController.mm	2026-11-11 10:58:48
 @@ -3,8 +3,6 @@
  
  #import "AnalyticsNoticeViewController.h"
@@ -964,18 +1848,18 @@
  
  #import "Core/Config/MainSettings.h"
  
-@@ -22,9 +20,6 @@
+@@ -21,9 +19,6 @@
+ - (void)HandleResponse:(bool)response {
    Config::SetBaseOrCurrent(Config::MAIN_ANALYTICS_PERMISSION_ASKED, true);
    Config::SetBaseOrCurrent(Config::MAIN_ANALYTICS_ENABLED, response);
-   
+-  
 -  [FIRAnalytics setAnalyticsCollectionEnabled:response];
 -  [[FIRCrashlytics crashlytics] setCrashlyticsCollectionEnabled:response];
--  
+   
    [self.navigationController popViewControllerAnimated:true];
    
-   [self.delegate didFinishAnalyticsNoticeWithResult:response sender:self];
---- a/Source/iOS/App/Common/UI/Emulation/EmulationViewController.mm
-+++ b/Source/iOS/App/Common/UI/Emulation/EmulationViewController.mm
+--- a/Source/iOS/App/Common/UI/Emulation/EmulationViewController.mm	2026-06-20 01:29:15
++++ b/Source/iOS/App/Common/UI/Emulation/EmulationViewController.mm	2026-11-11 10:58:48
 @@ -3,7 +3,6 @@
  
  #import "EmulationViewController.h"
@@ -997,8 +1881,8 @@
    }
  }
  
---- a/Source/iOS/App/Common/UI/Emulation/JitWait/JitWaitViewController.swift
-+++ b/Source/iOS/App/Common/UI/Emulation/JitWait/JitWaitViewController.swift
+--- a/Source/iOS/App/Common/UI/Emulation/JitWait/JitWaitViewController.swift	2026-06-20 01:29:15
++++ b/Source/iOS/App/Common/UI/Emulation/JitWait/JitWaitViewController.swift	2026-11-11 11:59:33
 @@ -8,22 +8,34 @@
    
    var timer: Timer?
@@ -1047,13 +1931,14 @@
    }
    
    @IBAction func noJitPressed(_ sender: Any) {
---- a/Source/iOS/App/Common/UI/Settings/Controllers/ControllersRootViewController.mm
-+++ b/Source/iOS/App/Common/UI/Settings/Controllers/ControllersRootViewController.mm
-@@ -2,6 +2,16 @@
+--- a/Source/iOS/App/Common/UI/Settings/Controllers/ControllersRootViewController.mm	2026-06-20 01:29:15
++++ b/Source/iOS/App/Common/UI/Settings/Controllers/ControllersRootViewController.mm	2026-11-12 11:46:38
+@@ -2,6 +2,17 @@
  // SPDX-License-Identifier: GPL-2.0-or-later
  
  #import "ControllersRootViewController.h"
 +#include <arpa/inet.h>
++#include "InputCommon/ControllerInterface/DualShockUDPClient/MRConnections.h"
 +#include <sstream>
 +#include "Common/FileUtil.h"
 +#include "Common/IniFile.h"
@@ -1066,18 +1951,22 @@
  
  #import "Core/Config/MainSettings.h"
  #import "Core/Config/WiimoteSettings.h"
-@@ -23,6 +33,7 @@
+@@ -23,6 +34,7 @@
  
  - (void)viewDidLoad {
    [super viewDidLoad];
-+  self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:@"MotionRemote" style:UIBarButtonItemStylePlain target:self action:@selector(configureMotionRemote)];
++  self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:@"Connections" style:UIBarButtonItemStylePlain target:self action:@selector(showConnections)];
    
    NSString* gamecubeString = DOLCoreLocalizedStringWithArgs(@"Port %1", @"d");
    NSString* wiiString = DOLCoreLocalizedStringWithArgs(@"Wii Remote %1", @"d");
-@@ -78,4 +89,107 @@
+@@ -76,6 +88,111 @@
+     portController.portType = _targetType;
+     portController.portNumber = _targetPort;
    }
- }
- 
++}
++
++- (void)showConnections { MotionRemoteShowConnections((__bridge void*)self); }
++
 +- (void)configureMotionRemote {
 +  UIAlertController* alert = [UIAlertController alertControllerWithTitle:@"MotionRemote" message:@"Start MotionRemote on the iPhone. Enter its Wi-Fi IPv4 address and matching player number (1–4). This configures that Wii Remote." preferredStyle:UIAlertControllerStyleAlert];
 +  [alert addTextFieldWithConfigurationHandler:^(UITextField* field) {
@@ -1179,11 +2068,11 @@
 +  UIAlertController* ready = [UIAlertController alertControllerWithTitle:@"MotionRemote configured" message:@"Open a Wii game to start receiving the iPhone’s buttons and motion. Enable JIT from Settings → JIT. Use the iPhone crosshair to recenter." preferredStyle:UIAlertControllerStyleAlert];
 +  [ready addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
 +  [self presentViewController:ready animated:YES completion:nil];
-+}
-+
+ }
+ 
  @end
---- a/Source/iOS/App/Common/UI/Settings/SettingsRootViewController.swift
-+++ b/Source/iOS/App/Common/UI/Settings/SettingsRootViewController.swift
+--- a/Source/iOS/App/Common/UI/Settings/SettingsRootViewController.swift	2026-06-20 01:29:15
++++ b/Source/iOS/App/Common/UI/Settings/SettingsRootViewController.swift	2026-11-11 11:58:36
 @@ -9,6 +9,8 @@
    @IBOutlet weak var coreVersionLabel: UILabel!
    
@@ -1203,8 +2092,77 @@
 +
    @IBAction func unwindToSettings( _ seg: UIStoryboardSegue) {}
  }
---- a/Source/iOS/App/DolphiniOS.xcodeproj/project.pbxproj
-+++ b/Source/iOS/App/DolphiniOS.xcodeproj/project.pbxproj
+--- a/Source/iOS/App/DolphiniOS/Info.plist	2026-06-20 01:29:15
++++ b/Source/iOS/App/DolphiniOS/Info.plist	2026-11-12 11:46:38
+@@ -6,6 +6,8 @@
+ 	<string>NotSet</string>
+ 	<key>CADisableMinimumFrameDurationOnPhone</key>
+ 	<true/>
++	<key>CFBundleDisplayName</key>
++	<string>DolphiniOS MotionRemote</string>
+ 	<key>CFBundleDocumentTypes</key>
+ 	<array>
+ 		<dict>
+@@ -98,7 +100,11 @@
+ 	<key>NSBonjourServices</key>
+ 	<array>
+ 		<string>_altserver._tcp</string>
++		<string>_remotepairing._tcp</string>
++		<string>_motionremote._udp</string>
+ 	</array>
++	<key>NSLocalNetworkUsageDescription</key>
++	<string>Receives your MotionRemote iPhone controller over Wi-Fi and returns game vibration.</string>
+ 	<key>UIApplicationSceneManifest</key>
+ 	<dict>
+ 		<key>UIApplicationSupportsMultipleScenes</key>
+@@ -218,5 +224,7 @@
+ 			</dict>
+ 		</dict>
+ 	</array>
++	<key>NSBluetoothAlwaysUsageDescription</key>
++	<string>Connects to an iPhone running MotionRemote over Bluetooth for controller input and game rumble.</string>
+ </dict>
+ </plist>
+--- a/Source/iOS/App/DolphiniOS/UI/Emulation/EmulationiOSViewController.mm	2026-06-20 01:29:15
++++ b/Source/iOS/App/DolphiniOS/UI/Emulation/EmulationiOSViewController.mm	2026-11-12 11:54:10
+@@ -2,6 +2,7 @@
+ // SPDX-License-Identifier: GPL-2.0-or-later
+ 
+ #import "EmulationiOSViewController.h"
++#include "InputCommon/ControllerInterface/DualShockUDPClient/MRConnections.h"
+ 
+ #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
+ 
+@@ -99,6 +100,7 @@
+ 
+ - (void)recreateMenu {
+   NSMutableArray<UIMenuElement*>* controllerActions = [[NSMutableArray alloc] init];
++  [controllerActions addObject:[UIAction actionWithTitle:@"MotionRemote Connections" image:[UIImage systemImageNamed:@"antenna.radiowaves.left.and.right"] identifier:nil handler:^(UIAction*) { MotionRemoteShowConnections((__bridge void*)self); }]];
+ 
+   NSMutableArray<UIMenuElement*>* visibleControllerActions = [[NSMutableArray alloc] init];
+ 
+--- a/Source/iOS/App/DolphiniOS/UI/Emulation/JitWait/JitWait.xib	2026-06-20 01:29:15
++++ b/Source/iOS/App/DolphiniOS/UI/Emulation/JitWait/JitWait.xib	2026-11-11 11:58:36
+@@ -51,7 +51,7 @@
+ 
+ Apple does not allow JIT to be used on iOS by default. However, by attaching a debugger, iOS will allow JIT to be used.
+ 
+-For more information, tap "Help".</string>
++Tap "JIT Setup" to import your pairing file and enable JIT with the built-in helper. Connect LocalDevVPN first.</string>
+                                     <fontDescription key="fontDescription" type="system" pointSize="17"/>
+                                     <nil key="textColor"/>
+                                     <nil key="highlightedColor"/>
+@@ -92,7 +92,7 @@
+                                                 <constraint firstAttribute="height" constant="45" id="a9Z-2E-qwn"/>
+                                             </constraints>
+                                             <fontDescription key="fontDescription" type="boldSystem" pointSize="15"/>
+-                                            <state key="normal" title="Help">
++                                            <state key="normal" title="JIT Setup">
+                                                 <color key="titleColor" white="1" alpha="1" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
+                                             </state>
+                                             <userDefinedRuntimeAttributes>
+--- a/Source/iOS/App/DolphiniOS.xcodeproj/project.pbxproj	2026-06-20 01:29:15
++++ b/Source/iOS/App/DolphiniOS.xcodeproj/project.pbxproj	2026-11-12 11:46:38
 @@ -110,8 +110,6 @@
  		B97C49B2297E717D00E30877 /* AboutViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = B97C49B1297E717C00E30877 /* AboutViewController.m */; };
  		B97C49B4297E7DB600E30877 /* AnalyticsNoticeViewControllerDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = B97C49B3297E7DB600E30877 /* AnalyticsNoticeViewControllerDelegate.swift */; };
@@ -1321,9 +2279,8 @@
  			runOnlyForDeploymentPostprocessing = 0;
  			shellPath = /bin/sh;
 -			shellScript = "\"$PROJECT_DIR/Project/Scripts/SetUpPython.sh\"\n";
--		};
 +			shellScript = "# Use bundled upstream localizations\n";
-+		};
+ 		};
 +		BC1000000000000000000020 /* Embed JIT Helper */ = {
 +            isa = PBXShellScriptBuildPhase;
 +            buildActionMask = 2147483647;
@@ -1363,7 +2320,7 @@
  				CODE_SIGN_STYLE = Automatic;
  				COPY_PHASE_STRIP = NO;
 -				CURRENT_PROJECT_VERSION = 1;
-+				CURRENT_PROJECT_VERSION = 3;
++				CURRENT_PROJECT_VERSION = 4;
  				DEBUG_INFORMATION_FORMAT = dwarf;
  				DEVELOPMENT_TEAM = 46669ZA7J4;
  				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -1390,7 +2347,7 @@
  				CODE_SIGN_STYLE = Automatic;
  				COPY_PHASE_STRIP = NO;
 -				CURRENT_PROJECT_VERSION = 1;
-+				CURRENT_PROJECT_VERSION = 3;
++				CURRENT_PROJECT_VERSION = 4;
  				DEBUG_INFORMATION_FORMAT = dwarf;
  				DEVELOPMENT_TEAM = 46669ZA7J4;
  				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -1417,7 +2374,7 @@
  				CODE_SIGN_STYLE = Automatic;
  				COPY_PHASE_STRIP = NO;
 -				CURRENT_PROJECT_VERSION = 1;
-+				CURRENT_PROJECT_VERSION = 3;
++				CURRENT_PROJECT_VERSION = 4;
  				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
  				DEVELOPMENT_TEAM = 46669ZA7J4;
  				ENABLE_NS_ASSERTIONS = NO;
@@ -1444,7 +2401,7 @@
  				CODE_SIGN_STYLE = Automatic;
  				COPY_PHASE_STRIP = NO;
 -				CURRENT_PROJECT_VERSION = 1;
-+				CURRENT_PROJECT_VERSION = 3;
++				CURRENT_PROJECT_VERSION = 4;
  				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
  				DEVELOPMENT_TEAM = 46669ZA7J4;
  				ENABLE_NS_ASSERTIONS = NO;
@@ -1471,7 +2428,7 @@
  				CODE_SIGN_STYLE = Automatic;
  				COPY_PHASE_STRIP = NO;
 -				CURRENT_PROJECT_VERSION = 1;
-+				CURRENT_PROJECT_VERSION = 3;
++				CURRENT_PROJECT_VERSION = 4;
  				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
  				DEVELOPMENT_TEAM = 46669ZA7J4;
  				ENABLE_NS_ASSERTIONS = NO;
@@ -1498,7 +2455,7 @@
  				CODE_SIGN_STYLE = Automatic;
  				COPY_PHASE_STRIP = NO;
 -				CURRENT_PROJECT_VERSION = 1;
-+				CURRENT_PROJECT_VERSION = 3;
++				CURRENT_PROJECT_VERSION = 4;
  				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
  				DEVELOPMENT_TEAM = 46669ZA7J4;
  				ENABLE_NS_ASSERTIONS = NO;
@@ -1525,7 +2482,7 @@
  				CODE_SIGN_STYLE = Automatic;
  				COPY_PHASE_STRIP = NO;
 -				CURRENT_PROJECT_VERSION = 1;
-+				CURRENT_PROJECT_VERSION = 3;
++				CURRENT_PROJECT_VERSION = 4;
  				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
  				DEVELOPMENT_TEAM = 46669ZA7J4;
  				ENABLE_NS_ASSERTIONS = NO;
@@ -1552,7 +2509,7 @@
  				CODE_SIGN_STYLE = Automatic;
  				COPY_PHASE_STRIP = NO;
 -				CURRENT_PROJECT_VERSION = 1;
-+				CURRENT_PROJECT_VERSION = 3;
++				CURRENT_PROJECT_VERSION = 4;
  				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
  				DEVELOPMENT_TEAM = 46669ZA7J4;
  				ENABLE_NS_ASSERTIONS = NO;
@@ -1579,7 +2536,7 @@
  				CODE_SIGN_ENTITLEMENTS = DolphiniOS/DolphiniOS.entitlements;
  				CODE_SIGN_STYLE = Automatic;
 -				CURRENT_PROJECT_VERSION = 1;
-+				CURRENT_PROJECT_VERSION = 3;
++				CURRENT_PROJECT_VERSION = 4;
  				GENERATE_INFOPLIST_FILE = YES;
  				INFOPLIST_FILE = DolphiniOS/Info.plist;
  				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
@@ -1606,7 +2563,7 @@
  				CODE_SIGN_ENTITLEMENTS = DolphiniOS/DolphiniOS.entitlements;
  				CODE_SIGN_STYLE = Automatic;
 -				CURRENT_PROJECT_VERSION = 1;
-+				CURRENT_PROJECT_VERSION = 3;
++				CURRENT_PROJECT_VERSION = 4;
  				GENERATE_INFOPLIST_FILE = YES;
  				INFOPLIST_FILE = DolphiniOS/Info.plist;
  				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
@@ -1633,7 +2590,7 @@
  				CODE_SIGN_ENTITLEMENTS = DolphiniOS/DolphiniOS.entitlements;
  				CODE_SIGN_STYLE = Automatic;
 -				CURRENT_PROJECT_VERSION = 1;
-+				CURRENT_PROJECT_VERSION = 3;
++				CURRENT_PROJECT_VERSION = 4;
  				GENERATE_INFOPLIST_FILE = YES;
  				INFOPLIST_FILE = DolphiniOS/Info.plist;
  				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
@@ -1660,7 +2617,7 @@
  				CODE_SIGN_ENTITLEMENTS = DolphiniOS/DolphiniOS.entitlements;
  				CODE_SIGN_STYLE = Automatic;
 -				CURRENT_PROJECT_VERSION = 1;
-+				CURRENT_PROJECT_VERSION = 3;
++				CURRENT_PROJECT_VERSION = 4;
  				GENERATE_INFOPLIST_FILE = YES;
  				INFOPLIST_FILE = DolphiniOS/Info.plist;
  				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
@@ -1696,7 +2653,7 @@
  				CODE_SIGN_ENTITLEMENTS = DolphiniOS/DolphiniOS.entitlements;
  				CODE_SIGN_STYLE = Automatic;
 -				CURRENT_PROJECT_VERSION = 1;
-+				CURRENT_PROJECT_VERSION = 3;
++				CURRENT_PROJECT_VERSION = 4;
  				GENERATE_INFOPLIST_FILE = YES;
  				INFOPLIST_FILE = DolphiniOS/Info.plist;
  				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
@@ -1714,7 +2671,7 @@
  				CODE_SIGN_ENTITLEMENTS = DolphiniOS/DolphiniOS.entitlements;
  				CODE_SIGN_STYLE = Automatic;
 -				CURRENT_PROJECT_VERSION = 1;
-+				CURRENT_PROJECT_VERSION = 3;
++				CURRENT_PROJECT_VERSION = 4;
  				GENERATE_INFOPLIST_FILE = YES;
  				INFOPLIST_FILE = DolphiniOS/Info.plist;
  				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
@@ -1741,7 +2698,7 @@
  				CODE_SIGN_ENTITLEMENTS = DolphiniOS/DolphiniOS.entitlements;
  				CODE_SIGN_STYLE = Automatic;
 -				CURRENT_PROJECT_VERSION = 1;
-+				CURRENT_PROJECT_VERSION = 3;
++				CURRENT_PROJECT_VERSION = 4;
  				GENERATE_INFOPLIST_FILE = YES;
  				INFOPLIST_FILE = DolphiniOS/Info.plist;
  				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
@@ -1768,7 +2725,7 @@
  				CODE_SIGN_ENTITLEMENTS = DolphiniOS/DolphiniOS.entitlements;
  				CODE_SIGN_STYLE = Automatic;
 -				CURRENT_PROJECT_VERSION = 1;
-+				CURRENT_PROJECT_VERSION = 3;
++				CURRENT_PROJECT_VERSION = 4;
  				GENERATE_INFOPLIST_FILE = YES;
  				INFOPLIST_FILE = DolphiniOS/Info.plist;
  				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
@@ -1791,7 +2748,9 @@
 -				kind = upToNextMajorVersion;
 -				minimumVersion = 1.0.0;
 -			};
--		};
++			isa = XCLocalSwiftPackageReference;
++			relativePath = "../../../BuildSupport/Packages/Layout";
+ 		};
 -		B97E4B472964CBA100B3EE9C /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */ = {
 -			isa = XCRemoteSwiftPackageReference;
 -			repositoryURL = "https://github.com/firebase/firebase-ios-sdk";
@@ -1799,9 +2758,7 @@
 -				kind = upToNextMajorVersion;
 -				minimumVersion = 9.0.0;
 -			};
-+			isa = XCLocalSwiftPackageReference;
-+			relativePath = "../../../BuildSupport/Packages/Layout";
- 		};
+-		};
  		B9FCB7DC28988E7E0020E233 /* XCRemoteSwiftPackageReference "AltKit" */ = {
 -			isa = XCRemoteSwiftPackageReference;
 -			repositoryURL = "https://github.com/rileytestut/AltKit.git";
@@ -1814,10 +2771,11 @@
  		};
  /* End XCRemoteSwiftPackageReference section */
  
-@@ -3616,16 +3616,6 @@
+@@ -3615,16 +3615,6 @@
+ 			isa = XCSwiftPackageProductDependency;
  			package = B900A7D027F5228B000361DD /* XCRemoteSwiftPackageReference "UICollectionViewLeftAlignedLayout" */;
  			productName = UICollectionViewLeftAlignedLayout;
- 		};
+-		};
 -		B97E4B482964CBA100B3EE9C /* FirebaseAnalyticsWithoutAdIdSupport */ = {
 -			isa = XCSwiftPackageProductDependency;
 -			package = B97E4B472964CBA100B3EE9C /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
@@ -1827,12 +2785,11 @@
 -			isa = XCSwiftPackageProductDependency;
 -			package = B97E4B472964CBA100B3EE9C /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
 -			productName = FirebaseCrashlytics;
--		};
+ 		};
  		B9FCB7DD28988E7E0020E233 /* AltKit */ = {
  			isa = XCSwiftPackageProductDependency;
- 			package = B9FCB7DC28988E7E0020E233 /* XCRemoteSwiftPackageReference "AltKit" */;
---- a/Source/iOS/App/DolphiniOS.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
-+++ /dev/null
+--- a/Source/iOS/App/DolphiniOS.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved	2026-06-20 01:29:15
++++ b/Source/iOS/App/DolphiniOS.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved	1970-01-01 01:00:00
 @@ -1,131 +0,0 @@
 -{
 -  "pins" : [
@@ -1965,59 +2922,16 @@
 -  ],
 -  "version" : 2
 -}
---- a/Source/iOS/App/DolphiniOS/Info.plist
-+++ b/Source/iOS/App/DolphiniOS/Info.plist
-@@ -6,6 +6,8 @@
- 	<string>NotSet</string>
- 	<key>CADisableMinimumFrameDurationOnPhone</key>
- 	<true/>
-+	<key>CFBundleDisplayName</key>
-+	<string>DolphiniOS MotionRemote</string>
- 	<key>CFBundleDocumentTypes</key>
- 	<array>
- 		<dict>
-@@ -98,7 +100,10 @@
- 	<key>NSBonjourServices</key>
- 	<array>
- 		<string>_altserver._tcp</string>
--	</array>
-+		<string>_remotepairing._tcp</string>
-+	</array>
-+	<key>NSLocalNetworkUsageDescription</key>
-+	<string>Receives your MotionRemote iPhone controller over Wi-Fi and returns game vibration.</string>
- 	<key>UIApplicationSceneManifest</key>
- 	<dict>
- 		<key>UIApplicationSupportsMultipleScenes</key>
---- a/Source/iOS/App/DolphiniOS/UI/Emulation/JitWait/JitWait.xib
-+++ b/Source/iOS/App/DolphiniOS/UI/Emulation/JitWait/JitWait.xib
-@@ -51,7 +51,7 @@
- 
- Apple does not allow JIT to be used on iOS by default. However, by attaching a debugger, iOS will allow JIT to be used.
- 
--For more information, tap "Help".</string>
-+Tap "JIT Setup" to import your pairing file and enable JIT with the built-in helper. Connect LocalDevVPN first.</string>
-                                     <fontDescription key="fontDescription" type="system" pointSize="17"/>
-                                     <nil key="textColor"/>
-                                     <nil key="highlightedColor"/>
-@@ -92,7 +92,7 @@
-                                                 <constraint firstAttribute="height" constant="45" id="a9Z-2E-qwn"/>
-                                             </constraints>
-                                             <fontDescription key="fontDescription" type="boldSystem" pointSize="15"/>
--                                            <state key="normal" title="Help">
-+                                            <state key="normal" title="JIT Setup">
-                                                 <color key="titleColor" white="1" alpha="1" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
-                                             </state>
-                                             <userDefinedRuntimeAttributes>
---- a/Source/iOS/App/Project/Config/Beta.xcconfig
-+++ b/Source/iOS/App/Project/Config/Beta.xcconfig
+--- a/Source/iOS/App/Project/Config/Beta.xcconfig	2026-06-20 01:29:15
++++ b/Source/iOS/App/Project/Config/Beta.xcconfig	2026-11-11 10:58:48
 @@ -3,4 +3,4 @@
  
  DOL_PREPROCESSOR_RELEASE_CHANNEL = BETA=1
  DOL_SWIFT_CONDITION_RELEASE_CHANNEL = BETA
 -DOL_APP_ICON_ASSET_NAME = AppIconBeta_Glass
 +DOL_APP_ICON_ASSET_NAME = AppIconBeta
---- a/Source/iOS/App/Project/Config/BundleIdentifier.xcconfig
-+++ b/Source/iOS/App/Project/Config/BundleIdentifier.xcconfig
+--- a/Source/iOS/App/Project/Config/BundleIdentifier.xcconfig	2026-06-20 01:29:15
++++ b/Source/iOS/App/Project/Config/BundleIdentifier.xcconfig	2026-11-11 10:55:06
 @@ -5,7 +5,7 @@
  // Change this line to modify the organization identifier.
  //
@@ -2027,29 +2941,29 @@
  
  //
  // You probably shouldn't touch anything below. (Unless you know what you're doing.)
---- a/Source/iOS/App/Project/Config/Normal.xcconfig
-+++ b/Source/iOS/App/Project/Config/Normal.xcconfig
+--- a/Source/iOS/App/Project/Config/Normal.xcconfig	2026-06-20 01:29:15
++++ b/Source/iOS/App/Project/Config/Normal.xcconfig	2026-11-11 10:58:48
 @@ -1,4 +1,4 @@
  // Copyright 2023 DolphiniOS Project
  // SPDX-License-Identifier: GPL-2.0-or-later
  
 -DOL_APP_ICON_ASSET_NAME = AppIcon_Glass
 +DOL_APP_ICON_ASSET_NAME = AppIcon
---- a/Source/iOS/App/Project/Scripts/BuildCore.sh
-+++ b/Source/iOS/App/Project/Scripts/BuildCore.sh
-@@ -6,6 +6,12 @@
- 
+--- a/Source/iOS/App/Project/Scripts/BuildCore.sh	2026-06-20 01:29:15
++++ b/Source/iOS/App/Project/Scripts/BuildCore.sh	2026-11-11 14:27:31
+@@ -7,6 +7,12 @@
  REPO_ROOT_DIR="$PROJECT_DIR/../../.."
  CMAKE_BUILD_DIR="$REPO_ROOT_DIR/build-$PLATFORM_NAME-$DOL_CORE_BUILD_TARGET"
-+
+ 
 +CMAKE_BIN="${MOTIONREMOTE_CMAKE:-$(command -v cmake || true)}"
 +if [ ! -x "$CMAKE_BIN" ]; then
 +  echo "CMake is missing. Install CMake 4.1.2 or set MOTIONREMOTE_CMAKE to its executable."
 +  exit 1
 +fi
- 
++
  MACHINE_ARCH="$(arch)"
  
+ case $PLATFORM_NAME in
 @@ -43,8 +49,8 @@
  
  cd "$CMAKE_BUILD_DIR"

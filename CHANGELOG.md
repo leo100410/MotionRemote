@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.15 (iPhone) · Dolphin 1.13 (Mac) · DolphiniOS 1.7 (iPad) · MotionSaber 1.3 · Monitor 1.0
+
+- **Turn off AirDrop and Handoff while playing.** Measurements showed that their periodic Wi-Fi pauses caused the remaining stutter.
+- Screen calibration on the phone ("virtual sensor bar") with a saved room; Dolphin uses it as an absolute pointer without recentering.
+- Connections window in Dolphin with one row per player, Wi-Fi and Bluetooth discovery, automatic profiles and a link test.
+- Several phones at once: each connected phone gets its own Wii Remote even when all phones use the same player setting. Fixed phones replacing each other, stalls of all players when one phone missed a status reply, and duplicate DSU entries for the same phone.
+- Bluetooth LE transport (tunnelled DSU) with a lower connection interval and immediate sending; Wi-Fi remains the recommended link.
+- Late or bursty packets no longer shift the pointer (rotation is accumulated per sample).
+- Diagnostics logs on the phone, in Dolphin and in MotionSaber that explain tracking and connection problems.
+- New Mac apps: MotionSaber, a rhythm game with the phone as a sword, and MotionRemote Monitor with a live 3D view and graphs.
+- One-shot haptic effects for MotionSaber cuts.
+
 ## 1.10
 
 - Keep short volume-button taps visible for at least 50 ms across Dolphin input polls.

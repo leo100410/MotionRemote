@@ -22,14 +22,25 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild \
 
 The application is at `build/Build/Products/Release-iphoneos/MotionRemote.app`. Package it inside a `Payload` folder to make an IPA, then sign it with your own signing tool. A device build with signing disabled is not directly installable.
 
+## MotionSaber and MotionRemote Monitor
+
+Both Mac apps build with the Swift compiler from Xcode; no Xcode project is needed:
+
+```sh
+zsh Saber/build.sh     # Saber/build/MotionSaber.app
+zsh Monitor/build.sh   # Monitor/build/MotionRemote Monitor.app
+```
+
+The scripts compile the shared packet code from `Sources` and sign the app ad hoc.
+
 ## Dolphin
 
-The patch targets **Dolphin 2609b**. Use that exact upstream version; applying it to a newer revision is not supported.
+The patch targets **Dolphin 2609b**. The release also includes `Dolphin-MotionRemote-1.13-source.tar.gz`, the complete source the Mac app was built from. Use that exact upstream version; applying it to a newer revision is not supported.
 
 ```sh
 mkdir -p DolphinBuild
 git clone --branch 2609b https://github.com/dolphin-emu/dolphin.git DolphinBuild/dolphin-2609b
-git -C DolphinBuild/dolphin-2609b apply ../motionremote-1.8.patch
+git -C DolphinBuild/dolphin-2609b apply ../motionremote-1.13.patch
 git -C DolphinBuild/dolphin-2609b submodule update --init --recursive
 ```
 
@@ -71,6 +82,20 @@ xcrun swiftc Sources/SpatialPose.swift Sources/DSU.swift Tests/main.swift -o /tm
 xcrun swiftc Sources/SpatialPose.swift Sources/DSU.swift Tests/Spatial/main.swift -o /tmp/motionremote-spatial-tests
 /tmp/motionremote-spatial-tests
 ```
+
+Further checks:
+
+```sh
+python3 Tests/test-screen-pointer.py   # screen-calibrated pointer equals a perfect recenter
+xcrun clang++ -std=c++20 -I DolphinBuild/dolphin-2609b/Source/Core Tests/Dolphin/gyro.cpp -o /tmp/mr-gyro && /tmp/mr-gyro
+mkdir -p /tmp/mr-logs && xcrun clang++ -std=c++20 -I DolphinBuild/dolphin-2609b/Source/Core Tests/Dolphin/link.cpp -o /tmp/mr-link && /tmp/mr-link /tmp/mr-logs
+xcrun swiftc -target arm64-apple-macosx14.0 Tests/Saber/main.swift Saber/Sources/SaberGame.swift Saber/Sources/SaberLink.swift \
+  Monitor/Sources/MonitorWire.swift Sources/DSU.swift Sources/SpatialPose.swift Sources/EventLog.swift Sources/ScreenCalibration.swift -o /tmp/mr-saber && /tmp/mr-saber
+xcrun swiftc -target arm64-apple-macosx14.0 Tests/Monitor/main.swift Monitor/Sources/MonitorWire.swift Monitor/Sources/MonitorModel.swift \
+  Monitor/Sources/MonitorScene.swift Sources/DSU.swift Sources/SpatialPose.swift -o /tmp/mr-monitor && /tmp/mr-monitor
+```
+
+`Tests/Bluetooth` checks the Bluetooth framing between the Swift and C++ implementations. `Tests/Monitor/fake-phone.py` and `Tests/Saber/fake-sword.py` play a phone on UDP 26760 so the Mac apps can be tried without an iPhone.
 
 The rumble test writes a fixture used by the Swift DSU checks, so run it first. `test-spatial-state.cpp` additionally needs the built ImGui library and the pose-struct fixture generated from the native DSU source. Recording tests are under `Tests/Recording` and `Tests/RecordingStorage`.
 

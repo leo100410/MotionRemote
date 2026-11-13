@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDisplayName</key>
+	<string>MotionRemote Monitor</string>
+	<key>CFBundleExecutable</key>
+	<string>MotionRemoteMonitor</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.leolange.motionremote.monitor</string>
+	<key>CFBundleName</key>
+	<string>MotionRemote Monitor</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_motionremote._udp</string>
+	</array>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Finds your MotionRemote iPhone and receives its motion data to draw the live graphs.</string>
+</dict>
+</plist>

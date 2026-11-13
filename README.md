@@ -4,61 +4,75 @@
 
 # MotionRemote
 
-Use an iPhone as a motion controller for Dolphin on Mac or iPad.
+Use an iPhone as a motion controller for Dolphin on Mac or iPad, or as a sword in the included MotionSaber game.
 
-MotionRemote sends buttons, acceleration and rotation over your local network. It includes a Wii Remote-style layout, a volume-button trigger, camera-assisted pointing and a custom Dolphin build with game rumble and a live motion overlay.
+> [!WARNING]
+> **Turn off AirDrop and Handoff on the Mac and on the iPhone while playing.**
+>
+> Both features use AWDL, an extra Wi-Fi link that makes the Wi-Fi radio briefly leave your network about once per second. Controller packets are then held back and arrive in a burst, which shows up as a regular stutter in the game. Measured on the development setup: with AirDrop and Handoff on, 9–20 pauses longer than 80 ms per 10 seconds (up to 400 ms) and up to 10% lost packets; with both off, no lost packets and no pause longer than 60 ms.
+>
+> - **Mac:** Control Centre → AirDrop → **No One** (or Off), and System Settings → General → AirDrop & Handoff → turn off **Allow Handoff between this Mac and your iCloud devices**.
+> - **iPhone:** Settings → General → AirDrop → **Receiving Off**, and Settings → General → AirPlay & Continuity → turn off **Handoff**.
+>
+> Switch them back on after playing if you need them.
 
-[Download v1.10](https://github.com/leo100410/MotionRemote/releases/tag/v1.10) · [Installation](docs/INSTALLATION.md) · [Build from source](docs/BUILDING.md) · [How it works](docs/ARCHITECTURE.md)
+[Download v1.15](https://github.com/leo100410/MotionRemote/releases/tag/v1.15) · [Installation](docs/INSTALLATION.md) · [iPad](docs/IPADOS.md) · [MotionSaber](docs/MOTIONSABER.md) · [Build from source](docs/BUILDING.md) · [How it works](docs/ARCHITECTURE.md)
+
+## What is included
+
+| Download | What it is |
+| --- | --- |
+| **MotionRemote 1.15** (iPhone) | The controller app: Wii Remote buttons, volume-button trigger, motion, camera tracking and screen calibration |
+| **Dolphin MotionRemote 1.13** (Mac) | Dolphin 2609b with a connection window, game rumble, screen-calibrated pointing and diagnostics |
+| **DolphiniOS MotionRemote 1.7** (iPad) | The same controller support for DolphiniOS, with built-in JIT activation |
+| **MotionSaber 1.3** (Mac) | A small rhythm game where the iPhone is the sword |
+| **MotionRemote Monitor 1.0** (Mac) | Live 3D view and graphs of the phone's motion and packet timing |
 
 ## What works
 
-- On-screen D-pad, A, B, Home, +, −, 1 and 2, with simultaneous button presses.
-- Volume Up as a hold-and-release trigger: A for Golf and Tennis, B for Bowling, or a manual override. Volume Down always holds B.
-- Four player slots, with a separate phone and Dolphin profile for each player.
-- Button haptics and game-triggered rumble through the custom Dolphin build.
-- Camera-assisted pointing, guided calibration and quick recentering.
-- An optional overlay with player rumble levels and the last three seconds of the phone's spatial path.
-- Local motion recordings with a timeline and 3D orientation playback.
+- On-screen D-pad, A, B, Home, +, −, 1 and 2, with simultaneous presses. Volume Up is a sport-specific A/B trigger; Volume Down always holds B.
+- **Connections window in Dolphin** (Options → MotionRemote Connections…): finds phones over Wi-Fi and Bluetooth, one row per player, applies the controller profile automatically.
+- **Several phones at once.** Each connected phone gets its own Wii Remote, even if all phones are left on player 1.
+- **Screen calibration ("virtual sensor bar").** Touch the left and right edge of the screen with the phone once; the phone remembers where the screen is in the room. Pointing at the screen centre is then always straight ahead, with no recentering.
+- Game rumble, button haptics, a live overlay with rumble levels and the phone's spatial path.
+- Diagnostics logs on the phone, in Dolphin and in MotionSaber that explain tracking and connection problems (for example Wi-Fi pauses caused by AirDrop/Handoff).
+- Local motion recordings with 3D orientation playback.
 
-Wii Sports Golf, Bowling and Tennis have been tried on the development setup. Other games may need different mappings; this is not a drop-in replacement for every Wii accessory.
-
-## Play on iPad
-
-[DolphiniOS MotionRemote 1.2](https://github.com/leo100410/MotionRemote/releases/tag/ipados-v1.2) runs the emulator on the iPad and uses the same iPhone controller app. It includes built-in JIT activation through LocalDevVPN, game rumble and the motion overlay. Keep its helper extension when signing.
-
-See the [iPad installation guide](docs/IPADOS.md) for pairing-file import, JIT setup and controller assignment, or [DolphiniOS build notes](DolphiniOS/README.md) for the matching source. Existing Mac downloads remain available.
+Wii Sports Golf, Bowling and Tennis have been played on the development setup. Tennis swing timing can still feel off; this is being investigated. Other games may need different mappings.
 
 ## Get started on Mac
 
-1. Install and sign the iPhone IPA using your own signing method.
-2. Open **Dolphin MotionRemote 1.8** on the Mac. Close other Dolphin copies first.
-3. Connect both devices to the same network and tap **Connect** on the phone.
-4. Add the phone's address and port **26760** in Dolphin's **Alternate Input Sources → DSU Client**.
-5. Set Wii Remote 1 to **Emulated Wii Remote**, then load the **MotionRemote** profile.
+1. Turn off AirDrop and Handoff (see above).
+2. Sign and install the iPhone IPA with your own signing method, open MotionRemote and tap **Connect**.
+3. Open **Dolphin MotionRemote 1.13**. Close other Dolphin copies first.
+4. Choose **Options → MotionRemote Connections…**, pick your phone in the row for player 1 and press **Connect**. The Wii Remote profile is applied automatically.
+5. Optional: on the phone, tap the gyroscope button and calibrate the screen (see [Installation](docs/INSTALLATION.md#4-calibrate-the-screen)).
 
-The [installation guide](docs/INSTALLATION.md) covers signing, profiles, calibration and multiplayer. Release files should be downloaded together with the matching source package and checksums.
+The [installation guide](docs/INSTALLATION.md) covers signing, Bluetooth, several phones, calibration and troubleshooting. Download release files together with the matching source packages and checksums.
 
 ## Requirements
 
 | Component | Requirement |
 | --- | --- |
-| iPhone app | iOS 17.2 or later; motion sensors and camera permission |
-| Camera-assisted pointing | ARKit world tracking support, an uncovered rear camera and a well-lit room |
-| Packaged Mac build | Apple Silicon, macOS 27 or later |
-| Network | Both devices can reach each other over the local network; UDP 26760 |
+| iPhone app | iOS 17.2 or later; camera, motion and local network permission |
+| Camera tracking and screen calibration | ARKit world tracking, an uncovered rear camera and a well-lit room. LiDAR helps tracking start faster but is not required |
+| Mac apps | Apple Silicon, macOS 27 or later for Dolphin; macOS 14 or later for MotionSaber and Monitor |
+| iPad emulator | iPadOS 15 or later; built-in JIT needs 17.4 or later |
+| Network | Both devices on the same local network (UDP 26760), or Bluetooth for Dolphin |
 
-The tested setup is an iPhone 15 Pro and an M5 MacBook Air. Support on other devices has not been verified. A stock Dolphin build can receive the standard DSU controls; game rumble, the overlay and camera correction need the MotionRemote build.
+The tested setup is an iPhone 15 Pro, an M5 MacBook Air and an iPad 10. Two phones were used together during development; four phones have not been tested. Other devices have not been verified.
 
 ## Things to know
 
-Camera tracking can lose accuracy during fast swings, in poor light or when the camera is covered. The controller falls back to gyro input during tracking loss. A new camera session needs recentering. Keep a secure grip when swinging the phone.
-
-The camera runs locally for the volume trigger and optional spatial tracking. No camera images or audio are sent to Dolphin. Recordings stay on the phone. Recorded playback shows orientation and acceleration; the live overlay shows the camera-tracked spatial path.
-
-The DSU connection is intended for a trusted local network. It has packet validation, but no encryption or authentication. Do not expose the port to the internet.
+- **Wi-Fi is recommended.** Bluetooth works for Dolphin but typically has more latency. Turn off AirDrop and Handoff for a smooth Wi-Fi link.
+- Camera tracking needs light and visible detail. Holding the phone like a sword or a Wii Remote often points the camera at the ceiling or floor; a blank ceiling can make tracking drop. The controller then falls back to the motion sensors and the log says why.
+- The phone stores one calibrated screen. Calibrating another screen (for example the iPad) replaces it. Recalibrate after moving the Mac.
+- Keep a secure grip when swinging the phone, especially close to a screen.
+- The DSU connection is meant for a trusted local network. It validates packets but has no encryption or authentication. Do not expose port 26760 to the internet.
+- No camera images or audio are sent to the Mac or iPad. Recordings and logs stay on the device.
 
 ## Credits and licenses
 
-The project began as a modification of [AimMac](https://github.com/Coolerwave/AimMac). Its Mac integration is based on [Dolphin 2609b](https://github.com/dolphin-emu/dolphin/tree/2609b).
+The project began as a modification of [AimMac](https://github.com/Coolerwave/AimMac). The Mac emulator is based on [Dolphin 2609b](https://github.com/dolphin-emu/dolphin/tree/2609b) and the iPad emulator on [DolphiniOS v5.0.0b6](https://github.com/OatmealDome/dolphin-ios/tree/v5.0.0b6).
 
-The iPhone app is MIT-licensed with upstream notices retained. Dolphin changes are GPL-2.0-or-later. See [LICENSE](LICENSE) and [third-party notices](docs/THIRD-PARTY.md). This project is not affiliated with Nintendo, Apple or the Dolphin Emulator Project. No games, firmware, signing certificates or provisioning profiles are included.
+The iPhone app, MotionSaber and MotionRemote Monitor are MIT-licensed with upstream notices retained. Dolphin and DolphiniOS changes are GPL-2.0-or-later; the built-in StikJIT framework is MPL-2.0. See [LICENSE](LICENSE) and [third-party notices](docs/THIRD-PARTY.md). This project is not affiliated with Nintendo, Apple or the Dolphin Emulator Project. No games, firmware, signing certificates or provisioning profiles are included.

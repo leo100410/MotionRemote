@@ -12,3 +12,7 @@ Info.plist
 downloads/
 
 !DolphiniOS/BuildSupport/JITHelper/Info.plist
+Monitor/build/
+Saber/build/
+!Monitor/Info.plist
+!Saber/Info.plist

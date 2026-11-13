@@ -1,70 +1,65 @@
 # Installation
 
-Use the MotionRemote 1.10 iPhone app with Dolphin MotionRemote 1.8. This update changes only the phone app; the existing Mac build and controller profiles still work.
+Release 1.15: MotionRemote 1.15 for iPhone, Dolphin MotionRemote 1.13 for Mac, DolphiniOS MotionRemote 1.7 for iPad, MotionSaber 1.3 and MotionRemote Monitor 1.0.
+
+> [!WARNING]
+> **Turn off AirDrop and Handoff on the Mac and the iPhone while playing.** They make Wi-Fi pause about once per second, which causes a regular stutter. See the [README](../README.md) for the measurements and where to switch them off.
 
 ## 1. Install the iPhone app
 
 The distributed IPA is **unsigned**. It cannot be installed by opening it directly on an iPhone.
 
-Import `MotionRemote-1.10.ipa` into your existing signing tool, sign it with a valid certificate and provisioning profile for your device, then install it. If you use eSign, import the IPA, select your signing certificate, sign, then install. You supply the signing credentials; none are included here.
+Import `MotionRemote-1.15.ipa` into your signing tool, sign it with a valid certificate and provisioning profile for your device, then install it. You supply the signing credentials; none are included here. Alternatively, [build the app in Xcode](BUILDING.md) and run it with your own development team.
 
-Alternatively, [build the app in Xcode](BUILDING.md), choose your development team and run it on your paired iPhone. Wireless deployment works only after Xcode pairing is configured. Enable Developer Mode if Xcode asks for it.
+Launch MotionRemote and allow Camera, Motion, Local Network and (for Bluetooth) Bluetooth access. Switching away from the app stops the controller.
 
-Launch MotionRemote and allow Camera, Motion and Local Network access. The camera is required for the volume-button interaction and optional spatial tracking. Switching away from the app stops the controller.
+## 2. Install the Mac apps
 
-## 2. Install Dolphin MotionRemote
+Extract `Dolphin-MotionRemote-1.13-macOS-arm64.zip` and move the app to your Applications folder. It needs Apple Silicon and macOS 27 or later. The apps are ad-hoc signed, not notarized; if macOS blocks one and you trust the download, use **System Settings → Privacy & Security → Open Anyway**. Do not disable system security globally.
 
-Extract `Dolphin-MotionRemote-1.8-macOS-arm64.zip` and move the app to your Applications folder. This build requires Apple Silicon and macOS 27 or later. It is ad-hoc signed, not notarized; use macOS's normal **Privacy & Security → Open Anyway** control if blocked and you trust the download. Do not disable system security globally.
-
-Close other Dolphin copies before opening it. The custom build uses Dolphin's existing user folder, so settings, game paths and controller mappings are shared. Back up that folder before changing a working setup:
+The custom Dolphin uses Dolphin's normal user folder, so settings, game paths and mappings are shared with other Dolphin copies. Back it up before changing a working setup:
 
 ```text
 ~/Library/Application Support/Dolphin
 ```
 
-## 3. Add the controller profiles
+`MotionSaber-1.3-macOS-arm64.zip` and `MotionRemote-Monitor-1.0-macOS-arm64.zip` contain the game and the motion monitor (macOS 14 or later).
 
-Copy the four `.ini` files from this repository's `Dolphin` directory into:
+## 3. Connect the phone to Dolphin
 
-```text
-~/Library/Application Support/Dolphin/Config/Profiles/Wiimote/
-```
+1. Put the Mac and the iPhone on the same network. Guest networks with client isolation do not work.
+2. On the phone, tap **Connect**.
+3. In Dolphin, choose **Options → MotionRemote Connections…**. The window has one row per player. Pick your phone in the row for player 1 and press **Connect**.
+4. Start a game. The phone shows **Connected to Dolphin**.
 
-Create the directory if it does not exist. Keep a backup if profiles with those names are already present.
+Each phone appears as a Wi-Fi entry and, if Bluetooth is allowed, as a Bluetooth entry. **Use Wi-Fi**: in practice it has lower latency than Bluetooth. Bluetooth may show a pairing prompt on both devices.
 
-## 4. Connect over Wi-Fi
+Connecting applies the matching Wii Remote profile and sets the Wii Remote to emulated mode. Your previous controller setup is saved once as `MotionRemote-WiimoteN-backup.ini` in Dolphin's Config folder. **Test** measures round-trip time, jitter and packet loss of a connection; **Disconnect** releases the player.
 
-1. Connect the Mac and iPhone to the same local network. Guest-network isolation can prevent devices from reaching each other.
-2. In MotionRemote settings, choose **Player 1**, then tap **Connect**. Note the phone address displayed at the bottom.
-3. In Dolphin, open **Controllers → Alternate Input Sources → DSU Client**. Enable the client and add a server:
+The profiles in this repository's `Dolphin` folder are only needed for a manual DSU setup (Controllers → Alternate Input Sources → DSU Client, the phone's address and port 26760).
 
-   | Field | Player 1 value |
-   | --- | --- |
-   | Name | `MotionRemote` |
-   | Address | The iPhone address shown in the app |
-   | Port | `26760` |
+### Several phones
 
-4. Set Wii Remote 1 to **Emulated Wii Remote** and open **Configure**.
-5. Select the **MotionRemote** profile and click **Load**. The device should be `DSUClient/0/MotionRemote`.
-6. Keep the configuration window open or start a game so Dolphin polls controller input. The phone should show **Connected to Dolphin**.
+Start MotionRemote on every phone and connect each one in its own row. The phones do not need different player settings: Dolphin gives every connected phone its own Wii Remote. Choosing a player that another phone holds moves that player to the new phone.
 
-Use the phone's actual address, not `127.0.0.1`. The controller server runs on the phone.
+## 4. Calibrate the screen
 
-## 5. Calibrate pointing
+Screen calibration tells the phone where your screen is in the room. Pointing at the screen centre is then always straight ahead, in Dolphin and in MotionSaber, without recentering. The phone remembers the room and restores the calibration on the next start.
 
-Tap the gyroscope button in the phone app. This enables camera tracking and opens calibration.
+1. On the phone, tap the gyroscope button. This turns on camera tracking and opens the calibration sheet.
+2. Move the phone slowly for a moment until tracking is normal (the buttons become active). Without LiDAR this can take a few seconds longer.
+3. Hold the **top corner of the phone where the camera is** against the **left edge of the Mac screen**, at about half height. The rear camera must stay uncovered and see the room (pointing down at the desk or to the side is fine). Tap **Mark left edge**. The phone vibrates briefly.
+4. Do the same on the **right edge** and tap **Mark right edge**.
 
-1. Keep the rear camera uncovered. Briefly scan a well-lit part of the room so ARKit can establish tracking.
-2. Hold the phone comfortably and reasonably still for the measurement. A table is not required. If you were actively rotating it, tap **Measure again**.
-3. Wait until the app reports normal camera tracking. Point the phone toward the centre of the screen in your playing grip, then choose **Set screen centre**.
+How you turn the phone does not matter, as long as the same corner touches the edge both times. Do not hold the camera against the screen like taking a photo: the phone measures the corner, and a covered camera loses tracking. If you mark the edges in the wrong order, the phone corrects it automatically.
 
-The crosshair button recentres the pointer without repeating the sensor measurement. Recenter after starting a new camera session. The camera setting is session-based; check it after restarting the app.
+To check: hold the phone flat and point its top edge at the screen centre. In MotionSaber the sword should point straight down the track. Recalibrate after moving the Mac or when the logs report that the measured width does not match the display.
 
-The pointer keeps its physical angle beyond the screen edges: if you rotate beyond an edge, you must undo that extra rotation before the pointer comes back. This is the intended **Preserve Angle** behaviour.
+Without calibration, Dolphin uses the previous method: point at the screen centre and press the crosshair to recenter.
 
 ## Playing Wii Sports
 
-Select the matching sport in the phone app. These presets select the Volume Up trigger mapping; they do not change the game's physics.
+Select the matching sport in the phone app. The presets only choose what Volume Up does:
 
 | Preset | Volume Up |
 | --- | --- |
@@ -72,39 +67,28 @@ Select the matching sport in the phone app. These presets select the Volume Up t
 | Bowling | B |
 | Tennis | A |
 
-Short volume-button taps are transmitted for at least 50 ms so Dolphin can observe them. A hold longer than 50 ms releases immediately when you let go.
+Volume Down always holds B. Short volume taps are held for at least 50 ms so Dolphin sees them. Both volume buttons and the on-screen buttons can be held independently.
 
-Volume Down always maps to B in every preset, independently of the Volume Up override. You can hold both volume buttons together; releasing one does not release the other or an on-screen button.
-
-Hold and release Volume Up as you would the mapped Wii button. In Golf, follow the game's A-button prompts to enter the actual shot rather than a practice swing. All main Wii buttons are also available on screen. Settings allow A/B trigger overrides.
+Swings in Wii Sports use the acceleration sent by the phone, not the pointer. Tennis swing timing can still feel off; this is being investigated.
 
 ## Game rumble and the overlay
 
-Enable **game haptics** in the phone settings. Load a profile whose **Rumble → Motor** field is `Motor`. Game rumble requires this custom Dolphin build; button feedback also works independently of game rumble.
+Game rumble needs **Game rumble** enabled in the phone settings and works only with the custom Dolphin build. **Show haptics and 3D path overlay** in the Connections window shows rumble levels, the phone's spatial path and whether the pointer currently uses the screen calibration.
 
-Use **Options → MotionRemote overlay → Show haptics and 3D path** to show the overlay. Choose the player whose spatial path you want to see. Enable camera tracking on that phone for the path. Rumble bars show the game's output, not just button taps.
+## Logs
 
-## More than one phone
-
-Give each phone a different player number, then add a DSU server for each address:
-
-| Player | Server name | Device | Profile |
-| --- | --- | --- | --- |
-| 1 | `MotionRemote` | `DSUClient/0/MotionRemote` | MotionRemote |
-| 2 | `MotionRemote P2` | `DSUClient/1/MotionRemote P2` | MotionRemote P2 |
-| 3 | `MotionRemote P3` | `DSUClient/2/MotionRemote P3` | MotionRemote P3 |
-| 4 | `MotionRemote P4` | `DSUClient/3/MotionRemote P4` | MotionRemote P4 |
-
-Configure the corresponding emulated Wii Remote for each player. Each phone has its own identity, button state, camera reference and rumble destination. Live multi-phone play has not been exhaustively tested.
+- **Dolphin:** `MotionRemote.log` in Dolphin's Logs folder (`~/Library/Application Support/Dolphin/Logs`). It records packet gaps and whether Wi-Fi held packets back, dropped them or the phone paused, a 10-second summary per player with a hint when gaps follow the AirDrop/Handoff rhythm, tracking problems reported by the phone and pointer source changes. The previous session is kept as `MotionRemote-previous.log`.
+- **iPhone:** Settings → Diagnostics → **Share current log**, or the Files app under On My iPhone → MotionRemote → Logs.
+- **MotionSaber:** `~/Library/Logs/MotionSaber`. The path is shown at the bottom of the game window.
 
 ## Troubleshooting
 
-**Waiting for Dolphin:** Open the emulated Wii Remote configuration or start a game. Check the phone address, port, matching server name, local-network permission and that only one Dolphin copy is running.
+**Regular stutter every second:** turn off AirDrop and Handoff on both devices. The Dolphin and MotionSaber logs report "held by Wi-Fi" gaps and a regular rhythm when this is the cause.
 
-**Buttons work, but game rumble does not:** Use Dolphin MotionRemote, load the matching profile and check `Rumble/Motor = Motor`. A game only vibrates when it actually sends rumble commands.
+**No phone in the Connections window:** keep MotionRemote open with **Connect** pressed, allow Local Network access on both devices and press **Scan again**. Enter the phone's IPv4 address under Connect IP if discovery is blocked.
 
-**The pointer drifts or jumps:** Check tracking quality, light and camera visibility. Recenter in your normal grip. If the camera session restarted, set the centre again. Turn off camera tracking to compare against gyro-only pointing.
+**Buttons work, but no rumble:** use Dolphin MotionRemote, enable game rumble on the phone and check that the Wii Remote profile's `Rumble/Motor` is `Motor`. A game vibrates only when it sends rumble.
 
-**Volume Up does not register:** Keep MotionRemote in the foreground and allow camera access. Volume-button behaviour with ARKit has not been verified on every iPhone/iOS combination; use the on-screen A/B buttons if needed.
+**Pointer or sword direction is off:** recalibrate the screen. Check light and that the camera is uncovered; the phone log names the tracking problem (for example too little detail or too fast movement).
 
-**Signing or installation fails:** The IPA needs your own valid signing setup. Check certificate expiry, device registration, entitlements and bundle identifier requirements in your signing tool. This project does not supply signing services.
+**Signing or installation fails:** the IPA needs your own valid signing setup. Check certificate expiry, device registration, entitlements and bundle identifier requirements in your signing tool.

@@ -3,6 +3,15 @@ import AVFoundation
 import AVKit
 import ARKit
 
+// Logs/ in Documents is visible in the Files app (On My iPhone → MotionRemote).
+let appLog: EventLog = {
+    let documents = FileManager.default.urls(for:.documentDirectory,in:.userDomainMask)[0]
+    let log = EventLog(directory:documents.appendingPathComponent("Logs"),prefix:"MotionRemote")
+    let info = Bundle.main.infoDictionary
+    log.write("APP","MotionRemote \(info?["CFBundleShortVersionString"] ?? "?") (\(info?["CFBundleVersion"] ?? "?")) on \(UIDevice.current.model), iOS \(UIDevice.current.systemVersion)")
+    return log
+}()
+
 @main struct MotionRemoteApp: App {
     var body: some Scene { WindowGroup { RemoteView() } }
 }

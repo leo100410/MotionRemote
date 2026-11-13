@@ -12,8 +12,8 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.leolange.motionremote
         SWIFT_VERSION: '5.0'
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-        MARKETING_VERSION: "1.10"
-        CURRENT_PROJECT_VERSION: 10
+        MARKETING_VERSION: "1.15"
+        CURRENT_PROJECT_VERSION: 15
         DEVELOPMENT_LANGUAGE: en
         TARGETED_DEVICE_FAMILY: '1'
     info:
@@ -25,7 +25,11 @@ targets:
         CFBundleLocalizations: [en]
         CFBundleDisplayName: MotionRemote
         UILaunchScreen: {}
+        NSBluetoothAlwaysUsageDescription: Connects to Dolphin over Bluetooth to send controller inputs and receive game rumble.
+        NSBonjourServices: [_motionremote._udp]
         NSLocalNetworkUsageDescription: Sends controller inputs directly to Dolphin on your local network.
         NSMotionUsageDescription: Uses motion and rotation to control your emulated Wii Remote.
-        NSCameraUsageDescription: Enables the volume trigger and optional spatial motion tracking. No camera images are saved or transmitted.
+        NSCameraUsageDescription: Enables the volume trigger and optional spatial tracking of the phone and screen. No camera images are saved or transmitted.
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true

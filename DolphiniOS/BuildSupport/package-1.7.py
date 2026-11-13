@@ -2,7 +2,7 @@ from pathlib import Path
 import shutil,plistlib,subprocess,zipfile,hashlib
 root=Path(__file__).resolve().parents[1]
 app=root/'BuildSupport/DerivedData/Build/Products/Release (Non-Jailbroken)-iphoneos/DolphiniOS.app'
-stage=root/'BuildSupport/package-1.2'
+stage=root/'BuildSupport/package-1.7'
 destination=stage/'Payload/DolphiniOS.app'
 assert not stage.exists(),'Existing package preserved'
 info=plistlib.loads((app/'Info.plist').read_bytes())
@@ -17,7 +17,7 @@ helper=destination/'PlugIns/MotionRemoteJITHelper.appex'
 assert helper.is_dir(), 'JIT helper missing'
 helper_info=plistlib.loads((helper/'Info.plist').read_bytes())
 assert helper_info['CFBundleIdentifier']==info['CFBundleIdentifier']+'.JITHelper'
-assert helper_info['CFBundleVersion']==info['CFBundleVersion']=='3'
+assert helper_info['CFBundleVersion']==info['CFBundleVersion']=='4'
 assert helper_info['CFBundleShortVersionString']==info['CFBundleShortVersionString']
 assert helper_info['NSExtension']['NSExtensionPointIdentifier']=='com.apple.ar.viewer'
 assert '_remotepairing._tcp' in info['NSBonjourServices']
@@ -35,7 +35,7 @@ helper_dependencies=subprocess.check_output(['otool','-L',str(helper/helper_info
 assert '@rpath/StikJIT.framework/StikJIT' in helper_dependencies
 helper_commands=subprocess.check_output(['otool','-l',str(helper/helper_info['CFBundleExecutable'])],text=True)
 assert '@executable_path/../../Frameworks' in helper_commands
-ipa=root/'DolphiniOS-MotionRemote-1.2.ipa'
+ipa=root/'DolphiniOS-MotionRemote-1.7.ipa'
 with zipfile.ZipFile(ipa,'w',zipfile.ZIP_DEFLATED) as archive:
  for file in stage.rglob('*'):
   if file.is_file():archive.write(file,file.relative_to(stage))
