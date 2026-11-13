@@ -1,4 +1,7 @@
-# MotionSaber
+# MotionSaber (highly experimental)
+
+> [!CAUTION]
+> **MotionSaber is highly experimental.** Hit detection and tracking in the game do not work well yet. Do not use MotionSaber as a reference for how well MotionRemote, the phone's tracking or the connection work; judge those in Dolphin and with the diagnostics logs.
 
 A small rhythm game for the Mac in which the iPhone is the sword. Blocks fly towards you in time with the music; cut each one in the direction of its arrow. Blocks with a dot can be cut in any direction.
 
