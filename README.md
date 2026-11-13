@@ -34,6 +34,7 @@ Use an iPhone as a motion controller for Dolphin on Mac or iPad, or as a sword i
 - **Connections window in Dolphin** (Options → MotionRemote Connections…): finds phones over Wi-Fi and Bluetooth, one row per player, applies the controller profile automatically.
 - **Several phones at once.** Each connected phone gets its own Wii Remote, even if all phones are left on player 1.
 - **Screen calibration ("virtual sensor bar").** Touch the left and right edge of the screen with the phone once; the phone remembers where the screen is in the room. Pointing at the screen centre is then always straight ahead, with no recentering.
+- **With or without LiDAR.** Camera tracking uses ARKit. On phones with LiDAR (such as the iPhone 15 Pro) it starts faster; devices without LiDAR track the same way after a few seconds of slow movement. If the camera cannot track (dark room, blank ceiling), the controller falls back to the motion sensors automatically.
 - Game rumble, button haptics, a live overlay with rumble levels and the phone's spatial path.
 - Diagnostics logs on the phone, in Dolphin and in MotionSaber that explain tracking and connection problems (for example Wi-Fi pauses caused by AirDrop/Handoff).
 - Local motion recordings with 3D orientation playback.
