@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.20 (iPhone) · stable release with the Mac apps
+
+- Restore the full-size D-pad and A button from before the redesign. 1.17 measured the space between the new bars and wrongly used the compact sizes meant for small phones.
+- The release also contains Dolphin MotionRemote 1.13, MotionSaber 1.3 and MotionRemote Monitor 1.0 (unchanged since 1.15).
+
 ## 1.17 (iPhone)
 
 - Redesigned controller screen: adapts to light and dark mode, instant spring feedback on every button (none with Reduce Motion), translucent top and bottom bars, a standard sport picker and labelled Center and Calibrate buttons.
@@ -25,14 +30,14 @@
 - Keep release timing immediate for longer holds.
 - Cancel pending releases on stop, mapping/camera changes and capture cancellation.
 
-## 1.9
+## 1.09
 
 - Map Volume Down to B in every sport.
 - Keep Volume Up, Volume Down and on-screen button holds independent.
 - Release both volume inputs when changing camera mode.
 - Compatible with the existing Dolphin MotionRemote 1.8 build.
 
-## 1.8
+## 1.08
 
 - Correct camera pointer axes to match the existing gyro input chain.
 - Allow calibration while holding the phone; reject sustained movement without learning tremor as gyro bias.

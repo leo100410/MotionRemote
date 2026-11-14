@@ -10,7 +10,7 @@ A small rhythm game for the Mac in which the iPhone is the sword. Blocks fly tow
 
 ## Play
 
-1. Start MotionRemote 1.17 on the iPhone and tap **Connect**.
+1. Start MotionRemote 1.20 on the iPhone and tap **Connect**.
 2. Open MotionSaber, pick the phone (or enter its IPv4 address) and press **Connect**.
 3. Press **Start**, the Space bar or **A** on the phone. **Home** or **+** pauses.
 

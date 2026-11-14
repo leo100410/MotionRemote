@@ -1,6 +1,6 @@
 # Installation
 
-MotionRemote 1.17 for iPhone ([release v1.17](https://github.com/leo100410/MotionRemote/releases/tag/v1.17)); Dolphin MotionRemote 1.13 for Mac, DolphiniOS MotionRemote 1.7 for iPad, MotionSaber 1.3 and MotionRemote Monitor 1.0 ([release v1.15](https://github.com/leo100410/MotionRemote/releases/tag/v1.15)).
+Release 1.20: MotionRemote 1.20 for iPhone, Dolphin MotionRemote 1.13 for Mac, DolphiniOS MotionRemote 1.7 for iPad, MotionSaber 1.3 and MotionRemote Monitor 1.0 ([release v1.20](https://github.com/leo100410/MotionRemote/releases/tag/v1.20); the iPad build is in [release v1.15](https://github.com/leo100410/MotionRemote/releases/tag/v1.15)).
 
 > [!WARNING]
 > **Turn off AirDrop and Handoff on the Mac and the iPhone while playing.** They make Wi-Fi pause about once per second, which causes a regular stutter. See the [README](../README.md) for the measurements and where to switch them off.
@@ -9,7 +9,7 @@ MotionRemote 1.17 for iPhone ([release v1.17](https://github.com/leo100410/Motio
 
 The distributed IPA is **unsigned**. It cannot be installed by opening it directly on an iPhone.
 
-Import `MotionRemote-1.17.ipa` into your signing tool, sign it with a valid certificate and provisioning profile for your device, then install it. You supply the signing credentials; none are included here. Alternatively, [build the app in Xcode](BUILDING.md) and run it with your own development team.
+Import `MotionRemote-1.20.ipa` into your signing tool, sign it with a valid certificate and provisioning profile for your device, then install it. You supply the signing credentials; none are included here. Alternatively, [build the app in Xcode](BUILDING.md) and run it with your own development team.
 
 Launch MotionRemote and allow Camera, Motion, Local Network and (for Bluetooth) Bluetooth access. Switching away from the app stops the controller.
 

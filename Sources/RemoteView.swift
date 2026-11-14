@@ -52,8 +52,9 @@ struct RemoteView: View {
     }
     var body: some View {
         GeometryReader { geometry in
-            let compact = geometry.size.height < 600
-            let cross: CGFloat = compact ? 124 : 150
+            // Measured between the top and bottom bars, so only small phones (iPhone SE) need the compact sizes.
+            let compact = geometry.size.height < 520
+            let cross: CGFloat = compact ? 124 : 156
             VStack(spacing:0) {
                 Picker("Sport",selection:$controller.profile) {
                     ForEach(["Golf","Bowling","Tennis"],id:\.self) { Text($0).tag($0) }
@@ -64,7 +65,7 @@ struct RemoteView: View {
                 Spacer(minLength:8)
                 dpad(size:cross)
                 Spacer(minLength:8)
-                key("A",size:compact ? 72 : 86)
+                key("A",size:compact ? 72 : 88)
                 Spacer(minLength:8)
                 HStack(spacing:32) {
                     key("-",symbol:"minus",size:44)
