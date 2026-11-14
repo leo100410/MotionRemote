@@ -228,6 +228,13 @@ struct RemoteView: View {
     private var settingsView: some View {
         NavigationStack {
             Form {
+                Section {
+                    Toggle("Detect automatically",isOn:$controller.autoGrip)
+                    GripPicker(grip:$controller.grip,auto:$controller.autoGrip)
+                        .listRowInsets(EdgeInsets(top:12,leading:12,bottom:12,trailing:12))
+                } header: { Text("Grip") } footer: {
+                    Text(controller.autoGrip ? "Hold the phone still and level, pointing at the screen, for a moment; the grip switches only then, never during a swing. Tap a grip to set it by hand." : "Drawn from your right side, phone pointing at the screen; blue is the display. Wii Remote: display up. Racket: hold the phone like a racket handle with the display facing sideways, and pick the side it faces.")
+                }
                 Section("Connections") {
                     Toggle("Allow Bluetooth connections",isOn:$controller.bluetoothEnabled).disabled(running)
                     BluetoothStatus(controller:controller.bluetooth)
@@ -326,5 +333,65 @@ private struct ScreenCalibrationView: View {
             }.buttonStyle(.borderedProminent)
             Button("Forget Saved Room",role:.destructive) { tracker.forget() }.disabled(!tracker.hasSavedRoom)
         }.frame(maxWidth:.infinity,alignment:.leading)
+    }
+}
+
+// Side view from the player's right, top edge pointing at the screen (right). A right hand grips the lower end.
+private struct GripIllustration: View {
+    let grip: Grip
+    var body: some View {
+        let thick: CGFloat = grip == .remote ? 9 : 26
+        ZStack {
+            Image(systemName:"tv").font(.system(size:11,weight:.semibold)).foregroundStyle(.tertiary).position(x:92,y:28)
+            // Phone: edge-on with the display up, or its back / display facing you.
+            Group {
+                switch grip {
+                case .remote:
+                    RoundedRectangle(cornerRadius:3,style:.continuous).fill(Color(.label)).frame(width:58,height:thick)
+                    Capsule().fill(Color.accentColor).frame(width:52,height:3).offset(y:-thick/2+1)
+                case .racketLeft:
+                    RoundedRectangle(cornerRadius:6,style:.continuous).fill(Color(.systemGray)).frame(width:58,height:thick)
+                    RoundedRectangle(cornerRadius:3,style:.continuous).fill(Color(.label)).frame(width:9,height:9).offset(x:20,y:-6)
+                case .racketRight:
+                    RoundedRectangle(cornerRadius:6,style:.continuous).fill(Color(.label)).frame(width:58,height:thick)
+                    RoundedRectangle(cornerRadius:4,style:.continuous).fill(Color.accentColor).frame(width:53,height:thick-5)
+                }
+            }
+            .position(x:52,y:grip == .remote ? 36 : 28)
+            // A thumbs-up fist turned on its side: wrist down, thumb along the phone towards the screen.
+            Image(systemName:"hand.thumbsup.fill").font(.system(size:36)).scaleEffect(x:-1).rotationEffect(.degrees(90))
+                .foregroundStyle(Color(red:1,green:0.8,blue:0.3)).position(x:26,y:34)
+        }
+        .frame(width:104,height:62)
+        .accessibilityHidden(true)
+    }
+}
+
+private struct GripPicker: View {
+    @Binding var grip: Grip
+    @Binding var auto: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    var body: some View {
+        HStack(spacing:8) {
+            ForEach(Grip.allCases) { option in
+                let selected = grip == option
+                // Choosing a grip by hand turns detection off.
+                Button { auto = false; grip = option } label: {
+                    VStack(spacing:8) {
+                        GripIllustration(grip:option)
+                        Text(option.title).font(.caption.weight(.medium)).multilineTextAlignment(.center)
+                            .fixedSize(horizontal:false,vertical:true).foregroundStyle(selected ? Color.accentColor : .primary)
+                    }
+                    .frame(maxWidth:.infinity).padding(.vertical,10).padding(.horizontal,4)
+                    .background(RoundedRectangle(cornerRadius:12,style:.continuous).fill(selected ? Color.accentColor.opacity(0.12) : .clear))
+                    .overlay(RoundedRectangle(cornerRadius:12,style:.continuous).strokeBorder(selected ? Color.accentColor : Color(.separator),lineWidth:selected ? 2 : 1))
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(selected ? .isSelected : [])
+            }
+        }
+        .animation(reduceMotion ? nil : .spring(response:0.25,dampingFraction:1),value:grip)
+        .sensoryFeedback(.selection,trigger:grip)
     }
 }

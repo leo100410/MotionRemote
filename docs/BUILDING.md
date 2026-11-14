@@ -35,12 +35,12 @@ The scripts compile the shared packet code from `Sources` and sign the app ad ho
 
 ## Dolphin
 
-The patch targets **Dolphin 2609b**. The release also includes `Dolphin-MotionRemote-1.13-source.tar.gz`, the complete source the Mac app was built from. Use that exact upstream version; applying it to a newer revision is not supported.
+The patch targets **Dolphin 2609b**. The release also includes `Dolphin-MotionRemote-1.18-source.tar.gz`, the complete source the Mac app was built from. Use that exact upstream version; applying it to a newer revision is not supported.
 
 ```sh
 mkdir -p DolphinBuild
 git clone --branch 2609b https://github.com/dolphin-emu/dolphin.git DolphinBuild/dolphin-2609b
-git -C DolphinBuild/dolphin-2609b apply ../motionremote-1.13.patch
+git -C DolphinBuild/dolphin-2609b apply ../motionremote-1.18.patch
 git -C DolphinBuild/dolphin-2609b submodule update --init --recursive
 ```
 
@@ -89,6 +89,8 @@ Further checks:
 python3 Tests/test-screen-pointer.py   # screen-calibrated pointer equals a perfect recenter
 xcrun clang++ -std=c++20 -I DolphinBuild/dolphin-2609b/Source/Core Tests/Dolphin/gyro.cpp -o /tmp/mr-gyro && /tmp/mr-gyro
 mkdir -p /tmp/mr-logs && xcrun clang++ -std=c++20 -I DolphinBuild/dolphin-2609b/Source/Core Tests/Dolphin/link.cpp -o /tmp/mr-link && /tmp/mr-link /tmp/mr-logs
+mkdir -p /tmp/mr-trace && xcrun clang++ -std=c++20 -I DolphinBuild/dolphin-2609b/Source/Core Tests/Dolphin/trace.cpp -o /tmp/mr-trace-test && /tmp/mr-trace-test /tmp/mr-trace
+xcrun swiftc Sources/Grip.swift Tests/Grip/main.swift -o /tmp/mr-grip && /tmp/mr-grip   # grip rotation, Wii axes, grip detection
 xcrun swiftc -target arm64-apple-macosx14.0 Tests/Saber/main.swift Saber/Sources/SaberGame.swift Saber/Sources/SaberLink.swift \
   Monitor/Sources/MonitorWire.swift Sources/DSU.swift Sources/SpatialPose.swift Sources/EventLog.swift Sources/ScreenCalibration.swift -o /tmp/mr-saber && /tmp/mr-saber
 xcrun swiftc -target arm64-apple-macosx14.0 Tests/Monitor/main.swift Monitor/Sources/MonitorWire.swift Monitor/Sources/MonitorModel.swift \

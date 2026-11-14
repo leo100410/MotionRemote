@@ -4,6 +4,7 @@ import CoreMotion
 import UIKit
 import Darwin
 import AVKit
+import simd
 
 final class Controller: ObservableObject {
     @Published var status = "Stopped"
@@ -28,6 +29,7 @@ final class Controller: ObservableObject {
             return
         }
         guard pose.isValid else { return }
+        var pose = pose; pose.orientation = gripped(pose.orientation)
         queue.async { self.latestPose = pose }
         if pose.tracking != 2 { normalTrackingSince = nil }
         else if normalTrackingSince == nil { normalTrackingSince = pose.timestamp }
@@ -37,7 +39,28 @@ final class Controller: ObservableObject {
     }
     func updateScreenPose(_ pose: ScreenPose) {
         let enabled = spatialEnabled
+        var pose = pose; pose.orientation = gripped(pose.orientation)
         queue.async { self.latestScreen = enabled ? pose : nil }
+    }
+    @Published var grip = Grip(rawValue:UserDefaults.standard.string(forKey:"grip") ?? "") ?? .remote {
+        didSet {
+            UserDefaults.standard.set(grip.rawValue,forKey:"grip")
+            let grip = grip
+            queue.async { self.sampleGrip = grip }
+            appLog.write("MOTION","Grip: \(grip.title)\(autoGrip ? " (detected)" : "")")
+        }
+    }
+    @Published var autoGrip = UserDefaults.standard.object(forKey:"autoGrip") as? Bool ?? true {
+        didSet {
+            UserDefaults.standard.set(autoGrip,forKey:"autoGrip")
+            let on = autoGrip
+            queue.async { self.gripDetector = on ? GripDetector(self.sampleGrip) : nil }
+        }
+    }
+    private lazy var sampleGrip = grip
+    private lazy var gripDetector: GripDetector? = autoGrip ? GripDetector(grip) : nil
+    private func gripped(_ q: SIMD4<Float>) -> SIMD4<Float> {
+        SIMD4<Float>(grip.orientation(simd_quatd(vector:SIMD4<Double>(q))).vector)
     }
     @Published var player = min(4,max(1,UserDefaults.standard.integer(forKey:"player"))) {
         didSet { UserDefaults.standard.set(player,forKey:"player") }
@@ -259,11 +282,18 @@ final class Controller: ObservableObject {
                 calibrating = false
             }
         }
-        // Core Motion gravity is downwards; DSU acceleration uses specific force (rest: Y = -1 g).
-        values = [Float(-(m.gravity.x+m.userAcceleration.x)),Float(m.gravity.z+m.userAcceleration.z),Float(-(m.gravity.y+m.userAcceleration.y)),Float((r[0]-bias[0])*180 / .pi),Float(-(r[2]-bias[2])*180 / .pi),Float((r[1]-bias[1])*180 / .pi)]
+        if let found = gripDetector?.update(gravity:SIMD3(m.gravity.x,m.gravity.y,m.gravity.z),
+                                            userAcceleration:SIMD3(m.userAcceleration.x,m.userAcceleration.y,m.userAcceleration.z),
+                                            rotation:SIMD3(r[0]-bias[0],r[1]-bias[1],r[2]-bias[2]),time:m.timestamp) {
+            sampleGrip = found
+            DispatchQueue.main.async { if self.autoGrip { self.grip = found } }
+        }
+        let a = sampleGrip.vector(SIMD3(m.gravity.x+m.userAcceleration.x,m.gravity.y+m.userAcceleration.y,m.gravity.z+m.userAcceleration.z))
+        let w = sampleGrip.vector(SIMD3(r[0]-bias[0],r[1]-bias[1],r[2]-bias[2]))*180 / .pi
+        values = dsuMotion(accel:a,rate:w)
         stamp = UInt64(max(0,m.timestamp)*1_000_000)
-        let attitude = m.attitude.quaternion
-        self.attitude = SIMD4(Float(attitude.x),Float(attitude.y),Float(attitude.z),Float(attitude.w))
+        let q = m.attitude.quaternion
+        attitude = SIMD4<Float>(sampleGrip.orientation(simd_quatd(ix:q.x,iy:q.y,iz:q.z,r:q.w)).vector)
         if recordingRequested && m.timestamp > lastRecordedStamp {
             lastRecordedStamp = m.timestamp
             let q = m.attitude.quaternion

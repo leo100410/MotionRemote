@@ -31,7 +31,7 @@ enum MonitorWire {
         if b[36] & 4 != 0 { buttons.append("Recenter") }
         // Undo the DSU axis order of Controller.sample so the graphs use the phone's own axes.
         return State(counter:UInt32(DSU.get(b,32,4)),timestamp:DSU.get(b,68,8),buttons:buttons,
-                     acceleration:SIMD3(-v[0],-v[2],v[1]),rotationRate:SIMD3(v[3],v[5],-v[4]))
+                     acceleration:SIMD3(v[0],-v[2],v[1]),rotationRate:SIMD3(v[3],v[5],-v[4]))
     }
     static func attitude(_ b: [UInt8], slot: UInt8) -> simd_quatf? {
         guard valid(b), b.count == 48, DSU.get(b,16,4) == 0x100006, b[20] == slot else { return nil }

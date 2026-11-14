@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.27 (iPhone) · Dolphin 1.18 (Mac) · MotionSaber 1.4 · Monitor 1.1
+
+- **Fix: sideways motion was mirrored.** The phone sent the Wii Remote's X acceleration with the wrong sign, so Wii Sports Tennis swapped forehand and backhand and balls on the left needed a right-to-left swing. The axes now follow Dolphin's own swing emulation (X left, Y towards the player, Z up), checked by `Tests/Grip`.
+- **Grip setting** (Settings → Grip): Wii Remote, Racket with the display left, Racket with the display right. **Detect automatically** (on by default) picks the grip from gravity while the phone is held still and level for 0.6 s, so it never changes during a swing. Motion, attitude and camera pose are turned to match.
+- Dolphin: rotation no longer alternates between zero and double speed when the phone's sample rate and Dolphin's Wii Remote polls differ.
+- Dolphin: a motion trace (`MotionRemote-trace-P1.csv` and so on, last ten sessions) is written to Dolphin's Logs folder. Press the phone's Center button to mark a moment.
+- MotionSaber 1.4 and Monitor 1.1 read the corrected X axis. Use them with iPhone 1.27; older Mac apps show sideways motion mirrored with the new app.
+- DolphiniOS MotionRemote 1.7 for iPad is unchanged (release v1.15).
+
 ## 1.20 (iPhone) · stable release with the Mac apps
 
 - Restore the full-size D-pad and A button from before the redesign. 1.17 measured the space between the new bars and wrongly used the compact sizes meant for small phones.

@@ -6,7 +6,7 @@ MotionRemote began as a modification of [Coolerwave/AimMac](https://github.com/C
 
 ## Dolphin
 
-The custom emulator is based on [Dolphin 2609b](https://github.com/dolphin-emu/dolphin/tree/2609b), licensed under GPL-2.0-or-later. `LICENSES/Dolphin-COPYING.txt` contains its license. The complete MotionRemote changes to upstream source are in `DolphinBuild/motionremote-1.13.patch`; the upstream project includes additional dependency notices under `LICENSES` and `Externals`.
+The custom emulator is based on [Dolphin 2609b](https://github.com/dolphin-emu/dolphin/tree/2609b), licensed under GPL-2.0-or-later. `LICENSES/Dolphin-COPYING.txt` contains its license. The complete MotionRemote changes to upstream source are in `DolphinBuild/motionremote-1.18.patch`; the upstream project includes additional dependency notices under `LICENSES` and `Externals`.
 
 When distributing the custom emulator binary, distribute its matching source and build instructions as well. A matching source archive is prepared alongside the local release files. Preserve all applicable dependency notices.
 

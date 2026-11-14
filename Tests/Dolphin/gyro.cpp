@@ -11,6 +11,14 @@ int main() {
   assert(std::abs(total(burst,50)-18.0)<1e-6);
   assert(burst.Discharge()[0]==0);  // a gap reports no rotation instead of the stale rate
 
+  // Phone at 100 Hz, polls at 200 Hz: every poll reports the rate, never 0 and then 2x.
+  Accumulator steady;
+  for(std::uint32_t i=0;i<50;++i) {
+    steady.Accept(i,1'000'000+i*10'000,{90,0,0},1.0+i*0.01);
+    const float a=steady.Discharge()[0],b=steady.Discharge()[0];
+    if(i>0)assert(std::abs(a-90)<1e-3 && std::abs(b-90)<1e-3);
+  }
+
   // The second transport delivers the same packets again, and UDP may reorder them.
   Accumulator twice;
   assert(twice.Accept(1,1'000'000,{50,0,0},1.0));

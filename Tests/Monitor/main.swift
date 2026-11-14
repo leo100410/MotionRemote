@@ -8,7 +8,7 @@ let state = DSU.state(buttons:["A","Up","Home"],motion:[0.1,-1,0.25,10,20,30],ti
 let parsed = MonitorWire.state(state,slot:1)!
 assert(parsed.counter == 77 && parsed.timestamp == 123_456)
 assert(Set(parsed.buttons) == ["A","Up","Home"])
-assert(parsed.acceleration == SIMD3(-0.1,-0.25,-1) && parsed.rotationRate == SIMD3(10,30,-20))
+assert(parsed.acceleration == SIMD3(0.1,-0.25,-1) && parsed.rotationRate == SIMD3(10,30,-20))
 assert(MonitorWire.state(state,slot:0) == nil)
 var broken = state; broken[80] ^= 1
 assert(MonitorWire.state(broken,slot:1) == nil)

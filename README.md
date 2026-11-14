@@ -22,11 +22,11 @@ Use an iPhone as a motion controller for Dolphin on Mac or iPad. An experimental
 
 | App | What it is |
 | --- | --- |
-| **MotionRemote 1.20** (iPhone) | The controller app: Wii Remote buttons, volume-button trigger, motion, camera tracking and screen calibration |
-| **Dolphin MotionRemote 1.13** (Mac) | Dolphin 2609b with a connection window, game rumble, screen-calibrated pointing and diagnostics |
+| **MotionRemote 1.27** (iPhone) | The controller app: Wii Remote buttons, volume-button trigger, motion, grip detection, camera tracking and screen calibration |
+| **Dolphin MotionRemote 1.18** (Mac) | Dolphin 2609b with a connection window, game rumble, screen-calibrated pointing, diagnostics and a motion trace |
 | **DolphiniOS MotionRemote 1.7** (iPad) | The same controller support for DolphiniOS, with built-in JIT activation |
-| **MotionSaber 1.3** (Mac) | Experimental: a small rhythm game where the iPhone is the sword ([details](docs/MOTIONSABER.md)) |
-| **MotionRemote Monitor 1.0** (Mac) | Live 3D view and graphs of the phone's motion and packet timing |
+| **MotionSaber 1.4** (Mac) | Experimental: a small rhythm game where the iPhone is the sword ([details](docs/MOTIONSABER.md)) |
+| **MotionRemote Monitor 1.1** (Mac) | Live 3D view and graphs of the phone's motion and packet timing |
 
 ## What works
 
@@ -37,15 +37,16 @@ Use an iPhone as a motion controller for Dolphin on Mac or iPad. An experimental
 - **With or without LiDAR.** Camera tracking uses ARKit. On phones with LiDAR (such as the iPhone 15 Pro) it starts faster; devices without LiDAR track the same way after a few seconds of slow movement. If the camera cannot track (dark room, blank ceiling), the controller falls back to the motion sensors automatically.
 - Game rumble, button haptics, a live overlay with rumble levels and the phone's spatial path.
 - Diagnostics logs on the phone, in Dolphin and in MotionSaber that explain tracking and connection problems (for example Wi-Fi pauses caused by AirDrop/Handoff).
+- **Grip detection.** Hold the phone like a Wii Remote (display up) or like a racket handle (display facing left or right); the app detects the grip while you hold still and turns the motion data so the game sees a normally held Wii Remote. The grip can also be chosen in Settings → Grip.
 - Local motion recordings with 3D orientation playback.
 
-Wii Sports Golf, Bowling and Tennis have been played on the development setup. Tennis swing timing can still feel off; this is being investigated. Other games may need different mappings.
+Wii Sports Golf, Bowling and Tennis have been played on the development setup. Tennis forehand and backhand work correctly from 1.27 on; earlier versions mirrored the sideways motion. Other games may need different mappings.
 
 ## Get started on Mac
 
 1. Turn off AirDrop and Handoff (see above).
 2. Sign and install the iPhone IPA with your own signing method, open MotionRemote and tap **Connect**.
-3. Open **Dolphin MotionRemote 1.13**. Close other Dolphin copies first.
+3. Open **Dolphin MotionRemote 1.18**. Close other Dolphin copies first.
 4. Choose **Options → MotionRemote Connections…**, pick your phone in the row for player 1 and press **Connect**. The Wii Remote profile is applied automatically.
 5. Optional: on the phone, tap the gyroscope button and calibrate the screen (see [Installation](docs/INSTALLATION.md#4-calibrate-the-screen)).
 
